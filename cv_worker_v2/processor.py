@@ -56,18 +56,20 @@ from .validator import validator, sharpness_score
 logger = logging.getLogger(__name__)
 
 
-# ─── Tunables (can be overridden via env / DB settings) ──────────────────────
+# ─── Tunables — all sourced from DB settings table ───────────────────────────
+# These constants are used ONLY as bootstrap defaults before the first
+# settings reload from the DB. Once the worker starts, all values come
+# from settings.get("cvXxx", config.XXX_FALLBACK).
+#
+# The authoritative defaults live in the DB (migration 0009) and in
+# config.py as Python-level fallbacks for the rare case where the DB
+# is unreachable on startup.
 
-# Max frames waiting for detection workers. Oldest frame is dropped on overflow.
-# At 25 fps × 4 cameras, 200 slots = ~2 s of buffer before drops start.
-FRAME_QUEUE_MAXSIZE   = int(os.getenv("CV_FRAME_QUEUE_SIZE",   "200"))
-
-# How many CPU threads run face detection in parallel.
-# Rule of thumb: min(4, cpu_count). Increase for multi-core servers.
-DETECTION_WORKERS     = int(os.getenv("CV_DETECTION_WORKERS",  "2"))
-
-# PersistenceWorker queue: unbounded — we never want to lose a finalized subject.
-PERSIST_QUEUE_MAXSIZE = 0  # 0 = unlimited
+# Used only to size the queue at module import time.
+# After startup, cvFrameQueueSize from DB is respected via _sync_settings.
+FRAME_QUEUE_MAXSIZE   = config.CV_FRAME_QUEUE_SIZE_DEFAULT
+DETECTION_WORKERS     = config.CV_DETECTION_WORKERS_DEFAULT
+PERSIST_QUEUE_MAXSIZE = 0  # unbounded — never lose a finalized subject
 
 
 # ─── Shared data structures ───────────────────────────────────────────────────
@@ -338,7 +340,7 @@ class DetectionWorkerPool:
                 # ── 2. Hybrid tracking ──────────────────────────────────────
                 centroid = _centroid(location)
                 tracker  = _find_or_create_tracker(
-                    job.camera_id, centroid, encoding, trackers
+                    job.camera_id, centroid, encoding, trackers, settings
                 )
 
                 # ── 3. Scene buffer / best-frame update ─────────────────────
@@ -551,14 +553,18 @@ def _find_or_create_tracker(
     centroid: Tuple[float, float],
     encoding: Encoding,
     trackers: Dict[str, SubjectTracker],
+    settings: dict,
 ) -> SubjectTracker:
     """Hybrid spatial + biometric tracker lookup. Call under cam_lock."""
+    spatial_px   = float(settings.get("cvSpatialMergePx",   config.SPATIAL_MERGE_PX))
+    biometric_sim = float(settings.get("cvBiometricMergeSim", config.BIOMETRIC_MERGE_SIM))
+
     # Spatial
     best_spatial: Optional[SubjectTracker] = None
     best_dist = float("inf")
     for t in trackers.values():
         d = math.dist(t.centroid, centroid)
-        if d < config.SPATIAL_MERGE_PX and d < best_dist:
+        if d < spatial_px and d < best_dist:
             best_dist = d
             best_spatial = t
 
@@ -568,7 +574,7 @@ def _find_or_create_tracker(
 
     # Biometric fallback
     for t in trackers.values():
-        if face_engine.compare_encodings(t.encoding, encoding) >= config.BIOMETRIC_MERGE_SIM:
+        if face_engine.compare_encodings(t.encoding, encoding) >= biometric_sim:
             t.centroid = centroid
             t.encoding = encoding
             return t
@@ -610,11 +616,12 @@ def _flush_stale_trackers(
     settings: dict,
 ) -> None:
     """Enqueue finalization for inactive trackers. Call under cam_lock."""
-    now       = time.time()
+    now              = time.time()
+    inactivity_sec   = float(settings.get("cvInactivityTimeoutSec", config.INACTIVITY_TIMEOUT_SEC))
     to_remove: List[str] = []
     for tid, t in trackers.items():
         inactive = now - t.last_seen
-        if inactive > config.INACTIVITY_TIMEOUT_SEC and not t.finalized:
+        if inactive > inactivity_sec and not t.finalized:
             t.finalized = True
             _persist_queue.put(
                 PersistJob(

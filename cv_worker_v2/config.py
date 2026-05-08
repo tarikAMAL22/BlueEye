@@ -43,6 +43,10 @@ BIOMETRIC_MERGE_SIM   = 0.90        # Min similarity to merge by encoding
 # ─── Biometric memory (cooldown) ──────────────────────────────────────────────
 ALERT_COOLDOWN_SEC    = 60          # Seconds before the same encoding can re-alert
 
+# ─── CV pipeline worker defaults (overridden by DB settings at runtime) ───────
+CV_FRAME_QUEUE_SIZE_DEFAULT  = 200  # Bounded frame queue — oldest evicted on full
+CV_DETECTION_WORKERS_DEFAULT = 2    # Parallel face-detection threads
+
 # ─── Identity reload ──────────────────────────────────────────────────────────
 IDENTITY_RELOAD_SEC   = 10          # Reload persons table every N seconds
 CAMERA_RELOAD_SEC     = 30          # Reload cameras table every N seconds

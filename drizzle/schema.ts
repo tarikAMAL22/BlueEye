@@ -156,6 +156,12 @@ export const settings = mysqlTable("settings", {
   cvAlertCooldownSec: int("cvAlertCooldownSec").default(60).notNull(),
   cvDeepAnalysisEnabled: boolean("cvDeepAnalysisEnabled").default(true).notNull(),
   cvFaceMinHeight: int("cvFaceMinHeight").default(40).notNull(),
+  cvLandmarkMinPoints: int("cvLandmarkMinPoints").default(25).notNull(),
+  cvBiometricMergeSim: decimal("cvBiometricMergeSim", { precision: 3, scale: 2 }).default("0.90").notNull(),
+  cvSpatialMergePx: int("cvSpatialMergePx").default(400).notNull(),
+  cvInactivityTimeoutSec: decimal("cvInactivityTimeoutSec", { precision: 4, scale: 1 }).default("5.0").notNull(),
+  cvFrameQueueSize: int("cvFrameQueueSize").default(200).notNull(),
+  cvDetectionWorkers: int("cvDetectionWorkers").default(2).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
