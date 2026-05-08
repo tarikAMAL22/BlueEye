@@ -19,4 +19,7 @@ RUN pip install --no-cache-dir opencv-python-headless mysql-connector-python pym
 COPY cv_worker_v2/ ./cv_worker_v2/
 
 # Run as a module
+ENV CV_FRAME_QUEUE_SIZE=200
+ENV CV_DETECTION_WORKERS=2
+
 CMD ["python", "-m", "cv_worker_v2.main"]

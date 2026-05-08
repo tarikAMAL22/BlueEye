@@ -73,6 +73,9 @@ def _shutdown(sig, frame):  # noqa: ARG001
     logger.info("Shutdown signal received — stopping all processors …")
     for proc in _processors.values():
         proc.stop()
+    from .processor import detection_pool, persistence_worker
+    detection_pool.stop()
+    persistence_worker.stop()
     face_engine.stop()
     logger.info("BlueEye CV Worker v2 stopped.")
     sys.exit(0)
@@ -95,6 +98,16 @@ def main() -> None:
     # Start Flask API server
     api = APIServer()
     api.start()
+
+    # Start detection worker pool + persistence worker (decoupled pipeline)
+    from .processor import detection_pool, persistence_worker
+    detection_pool.start()
+    persistence_worker.start()
+    logger.info(
+        "Detection pipeline started — detection_workers=%d, frame_queue_size=%d",
+        detection_pool._n,
+        detection_pool._n,
+    )
 
     # Start Deep Analysis worker
     from .deep_analyzer import analyzer
