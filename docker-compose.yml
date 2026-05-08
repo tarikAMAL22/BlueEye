@@ -1,0 +1,78 @@
+services:
+  db:
+    image: mysql:8.0
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: my-secret-pw
+      MYSQL_DATABASE: blueeye
+    ports:
+      - "3306:3306"
+    volumes:
+      - db_data:/var/lib/mysql
+    networks:
+      - blueeye-network
+
+  app:
+    image: node:22
+    working_dir: /app
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=mysql://root:my-secret-pw@db:3306/blueeye
+      - NODE_ENV=development
+      - MEDIAMTX_INTERNAL_URL=http://host.docker.internal:8888
+    depends_on:
+      - db
+    volumes:
+      - .:/app
+      - node_modules:/app/node_modules
+    networks:
+      - blueeye-network
+    deploy:
+      resources:
+        reservations:
+          cpus: '1'
+          memory: 2048M
+    # corepack enables pnpm. We wait for db to be up before pushing schema.
+    command: >
+      bash -c "
+      corepack enable pnpm &&
+      pnpm install &&
+      echo 'Waiting for database...' &&
+      npx -y wait-port db:3306 &&
+      echo 'Database is ready. (Skipping automated schema push)...' &&
+      echo 'Starting development server...' &&
+      pnpm run dev
+      "
+
+  cv-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.v2
+    container_name: blueeye-cv-worker
+    environment:
+      - DB_HOST=db
+      - DB_USER=root
+      - DB_PASSWORD=my-secret-pw
+      - DB_NAME=blueeye
+    depends_on:
+      - db
+    restart: unless-stopped
+    shm_size: '2gb'
+    deploy:
+      resources:
+        reservations:
+          cpus: '2'
+          memory: 4096M
+    volumes:
+      - .:/app
+    networks:
+      - blueeye-network
+
+networks:
+  blueeye-network:
+    driver: bridge
+
+volumes:
+  db_data:
+  node_modules:

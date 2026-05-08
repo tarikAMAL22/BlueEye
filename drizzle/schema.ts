@@ -1,0 +1,164 @@
+import { decimal, int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, json } from "drizzle-orm/mysql-core";
+
+/**
+ * Core user table backing auth flow.
+ * Extend this file with additional tables as your product grows.
+ * Columns use camelCase to match both database fields and generated types.
+ */
+export const users = mysqlTable("users", {
+  /**
+   * Surrogate primary key. Auto-incremented numeric value managed by the database.
+   * Use this for relations between tables.
+   */
+  id: int("id").autoincrement().primaryKey(),
+  /** Manus OAuth identifier (openId) returned from the OAuth callback. Unique per user. */
+  openId: varchar("openId", { length: 64 }).notNull().unique(),
+  name: text("name"),
+  email: varchar("email", { length: 320 }),
+  loginMethod: varchar("loginMethod", { length: 64 }),
+  role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
+});
+
+export type User = typeof users.$inferSelect;
+export type InsertUser = typeof users.$inferInsert;
+
+/**
+ * Cameras table: stores RTSP camera information
+ */
+export const cameras = mysqlTable("cameras", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 255 }).notNull(),
+  rtspUrl: varchar("rtspUrl", { length: 512 }).notNull(),
+  location: text("location"),
+  zoneId: int("zoneId"),
+  status: mysqlEnum("status", ["online", "offline", "maintenance"]).default("offline").notNull(),
+  lastSeen: timestamp("lastSeen"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type Camera = typeof cameras.$inferSelect;
+export type InsertCamera = typeof cameras.$inferInsert;
+
+/**
+ * Zones table: security zones with threat levels
+ */
+export const zones = mysqlTable("zones", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 255 }).notNull(),
+  description: text("description"),
+  threatLevel: mysqlEnum("threatLevel", ["low", "medium", "high", "critical"]).default("medium").notNull(),
+  accessRules: json("accessRules").$type<{ allowedRoles: string[]; timeRestrictions?: { startTime: string; endTime: string } }[]>(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type Zone = typeof zones.$inferSelect;
+export type InsertZone = typeof zones.$inferInsert;
+
+/**
+ * Persons table: known individuals in the registry
+ */
+export const persons = mysqlTable("persons", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 255 }).notNull(),
+  role: varchar("role", { length: 255 }).notNull(),
+  photoUrl: varchar("photoUrl", { length: 512 }),
+  faceEncoding: json("faceEncoding").$type<number[]>(),
+  isBlacklisted: boolean("isBlacklisted").default(false).notNull(),
+  zonePermissions: json("zonePermissions").$type<{ zoneId: number; allowed: boolean }[]>(),
+  activityHistory: json("activityHistory").$type<{ timestamp: number; action: string }[]>(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type Person = typeof persons.$inferSelect;
+export type InsertPerson = typeof persons.$inferInsert;
+
+/**
+ * Alerts table: real-time detection events
+ */
+export const alerts = mysqlTable("alerts", {
+  id: int("id").autoincrement().primaryKey(),
+  personId: int("personId"),
+  cameraId: int("cameraId").notNull(),
+  zoneId: int("zoneId").notNull(),
+  faceSnapshotUrl: varchar("faceSnapshotUrl", { length: 512 }),
+  bestFrameSnapshotUrl: varchar("bestFrameSnapshotUrl", { length: 512 }),
+  confidence: decimal("confidence", { precision: 5, scale: 2 }).notNull(),
+  status: mysqlEnum("status", ["active", "acknowledged", "escalated", "dismissed"]).default("active").notNull(),
+  threatLevel: mysqlEnum("threatLevel", ["low", "medium", "high", "critical"]).default("medium").notNull(),
+  logs: json("logs").$type<{ timestamp: string; action: string; details?: string }[]>(),
+  metadata: json("metadata"), // For multi-face detection and other extras
+  timestamp: timestamp("timestamp").defaultNow().notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type Alert = typeof alerts.$inferSelect;
+export type InsertAlert = typeof alerts.$inferInsert;
+
+/**
+ * Events table: historical log of all recognition events
+ */
+export const events = mysqlTable("events", {
+  id: int("id").autoincrement().primaryKey(),
+  personId: int("personId"),
+  alertId: int("alertId"),
+  cameraId: int("cameraId").notNull(),
+  zoneId: int("zoneId").notNull(),
+  faceSnapshotUrl: varchar("faceSnapshotUrl", { length: 512 }),
+  bestFrameSnapshotUrl: varchar("bestFrameSnapshotUrl", { length: 512 }),
+  confidence: decimal("confidence", { precision: 5, scale: 2 }).notNull(),
+  eventType: mysqlEnum("eventType", ["recognition", "unknown", "alert", "identity_correction", "false_positive"]).default("recognition").notNull(),
+  payload: json("payload"),
+  timestamp: timestamp("timestamp").defaultNow().notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type Event = typeof events.$inferSelect;
+export type InsertEvent = typeof events.$inferInsert;
+
+/**
+ * AccessRules table: per-zone access permissions for persons
+ */
+export const accessRules = mysqlTable("accessRules", {
+  id: int("id").autoincrement().primaryKey(),
+  personId: int("personId").notNull(),
+  zoneId: int("zoneId").notNull(),
+  allowed: boolean("allowed").default(false).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type AccessRule = typeof accessRules.$inferSelect;
+export type InsertAccessRule = typeof accessRules.$inferInsert;
+
+/**
+ * Settings table: system-wide configuration
+ */
+export const settings = mysqlTable("settings", {
+  id: int("id").autoincrement().primaryKey(),
+  platformName: varchar("platformName", { length: 255 }).default("BlueEye").notNull(),
+  alertThreshold: decimal("alertThreshold", { precision: 5, scale: 2 }).default("0.75").notNull(),
+  notificationPreferences: json("notificationPreferences").$type<{ emailAlerts: boolean; pushAlerts: boolean }>(),
+  retentionDays: int("retentionDays").default(90).notNull(),
+  clearOnStart: boolean("clearOnStart").default(false).notNull(),
+  testMode: boolean("testMode").default(false).notNull(),
+  biometricThreshold: decimal("biometricThreshold", { precision: 3, scale: 2 }).default("0.50").notNull(),
+  // AI & CV Configuration
+  cvSceneBufferSec: decimal("cvSceneBufferSec", { precision: 4, scale: 2 }).default("3.00").notNull(),
+  cvDetectionInterval: int("cvDetectionInterval").default(2).notNull(),
+  cvDownscaleFactor: decimal("cvDownscaleFactor", { precision: 3, scale: 2 }).default("0.50").notNull(),
+  cvRecognitionTolerance: decimal("cvRecognitionTolerance", { precision: 3, scale: 2 }).default("0.50").notNull(),
+  cvAlertCooldownSec: int("cvAlertCooldownSec").default(60).notNull(),
+  cvDeepAnalysisEnabled: boolean("cvDeepAnalysisEnabled").default(true).notNull(),
+  cvFaceMinHeight: int("cvFaceMinHeight").default(40).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type Setting = typeof settings.$inferSelect;
+export type InsertSetting = typeof settings.$inferInsert;

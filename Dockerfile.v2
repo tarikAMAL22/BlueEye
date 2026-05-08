@@ -1,0 +1,21 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# Use the exact same system dependencies as the original working Dockerfile
+RUN apt-get update && apt-get install -y \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    cmake \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install python packages directly as in the original
+RUN pip install --no-cache-dir opencv-python-headless mysql-connector-python pymysql DBUtils requests face_recognition numpy Pillow flask
+
+# Copy the entire modular package
+COPY cv_worker_v2/ ./cv_worker_v2/
+
+# Run as a module
+CMD ["python", "-m", "cv_worker_v2.main"]

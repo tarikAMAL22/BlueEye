@@ -1,0 +1,1 @@
+ALTER TABLE `persons` ADD `isBlacklisted` boolean DEFAULT false NOT NULL;

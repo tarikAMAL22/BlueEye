@@ -1,0 +1,1 @@
+ALTER TABLE `events` MODIFY COLUMN `eventType` enum('recognition','unknown','alert','identity_correction','false_positive') NOT NULL DEFAULT 'recognition';

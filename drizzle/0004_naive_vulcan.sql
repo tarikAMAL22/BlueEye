@@ -1,0 +1,1 @@
+ALTER TABLE `settings` ADD `testMode` boolean DEFAULT false NOT NULL;

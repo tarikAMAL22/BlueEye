@@ -1,0 +1,1 @@
+ALTER TABLE `settings` ADD `biometricThreshold` decimal(3,2) DEFAULT '0.50' NOT NULL;
