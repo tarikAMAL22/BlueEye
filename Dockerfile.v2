@@ -12,7 +12,8 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install python packages directly as in the original
-RUN pip install --no-cache-dir opencv-python-headless mysql-connector-python pymysql DBUtils requests face_recognition numpy Pillow flask
+RUN pip install --no-cache-dir opencv-python-headless mysql-connector-python pymysql DBUtils requests face_recognition numpy Pillow flask \
+    ultralytics retinaface
 
 # Copy the entire modular package
 COPY cv_worker_v2/ ./cv_worker_v2/
