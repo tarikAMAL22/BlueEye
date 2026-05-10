@@ -34,14 +34,16 @@ MERGE_TOLERANCE       = 0.10        # 1 - tolerance for 90 % similarity merge
 
 # ─── Scene buffer ─────────────────────────────────────────────────────────────
 SCENE_BUFFER_SEC      = 10.0        # Seconds to accumulate frames per subject
-INACTIVITY_TIMEOUT_SEC = 5.0        # Flush a tracker after N seconds without detection
+INACTIVITY_TIMEOUT_SEC = 2.0        # Flush a tracker after N seconds without detection
+MIN_FRAME_COUNT       = 5           # Minimum detections required before persisting a tracker
 
 # ─── Tracking ────────────────────────────────────────────────────────────────
-SPATIAL_MERGE_PX      = 400         # Max centroid distance to merge trackers (px)
+SPATIAL_MERGE_PX      = 100         # Max centroid distance to merge trackers (px)
 BIOMETRIC_MERGE_SIM   = 0.90        # Min similarity to merge by encoding
 
 # ─── Biometric memory (cooldown) ──────────────────────────────────────────────
 ALERT_COOLDOWN_SEC    = 60          # Seconds before the same encoding can re-alert
+CAMERA_DEDUP_WINDOW_SEC = 5         # Skip alert if same face seen on same camera within this window
 
 # ─── CV pipeline worker defaults (overridden by DB settings at runtime) ───────
 CV_FRAME_QUEUE_SIZE_DEFAULT  = 200  # Bounded frame queue — oldest evicted on full

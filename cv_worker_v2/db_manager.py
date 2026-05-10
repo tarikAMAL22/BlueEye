@@ -52,6 +52,33 @@ def get_connection():
         conn.close()  # returns to pool
 
 
+def ensure_movements_table() -> None:
+    """Create the movements table if it does not exist (idempotent migration)."""
+    sql = """
+        CREATE TABLE IF NOT EXISTS `movements` (
+            `id`           INT           NOT NULL AUTO_INCREMENT,
+            `cameraId`     INT           NOT NULL,
+            `zoneId`       INT           NOT NULL DEFAULT 1,
+            `trackerId`    VARCHAR(64)   NOT NULL,
+            `frameUrls`    JSON          NULL,
+            `bestFrameUrl` VARCHAR(512)  NULL,
+            `faceCount`    INT           NOT NULL DEFAULT 0,
+            `frameCount`   INT           NOT NULL DEFAULT 0,
+            `alertId`      INT           NULL,
+            `timestamp`    TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            `createdAt`    TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`id`),
+            INDEX `idx_movements_camera`    (`cameraId`),
+            INDEX `idx_movements_timestamp` (`timestamp`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+        conn.commit()
+    logger.info("movements table ready")
+
+
 def get_settings() -> Dict[str, Any]:
     """Fetch the first row of the settings table."""
     sql = "SELECT * FROM settings LIMIT 1"
@@ -119,19 +146,22 @@ def create_alert(
     threat_level: str,
     confidence: float,
     face_snapshot_url: str,
-    best_frame_url: str
+    best_frame_url: str,
+    metadata: Optional[Dict[str, Any]] = None,
 ) -> int:
     """Insert a row into `alerts` and return the alert id."""
     sql = """
         INSERT INTO alerts
-            (cameraId, zoneId, personId, threatLevel, confidence, 
-             faceSnapshotUrl, bestFrameSnapshotUrl, status, createdAt)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            (cameraId, zoneId, personId, threatLevel, confidence,
+             faceSnapshotUrl, bestFrameSnapshotUrl, status, metadata, createdAt)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """
     now = datetime.datetime.utcnow()
     payload = (
         camera_id, zone_id, person_id, threat_level, confidence,
-        face_snapshot_url, best_frame_url, "active", now
+        face_snapshot_url, best_frame_url, "active",
+        json.dumps(metadata) if metadata else None,
+        now,
     )
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -140,6 +170,46 @@ def create_alert(
         conn.commit()
     logger.info("Alert created id=%d person=%d threat=%s confidence=%.2f", alert_id, person_id, threat_level, confidence)
     return alert_id
+
+
+def create_movement(
+    camera_id: int,
+    zone_id: int,
+    tracker_id: str,
+    frame_urls: List[str],
+    best_frame_url: Optional[str],
+    face_count: int,
+    frame_count: int,
+    alert_id: Optional[int] = None,
+) -> int:
+    """Insert a row into `movements` and return its id."""
+    sql = """
+        INSERT INTO movements
+            (cameraId, zoneId, trackerId, frameUrls, bestFrameUrl,
+             faceCount, frameCount, alertId, createdAt)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """
+    now = datetime.datetime.utcnow()
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (
+                camera_id, zone_id, tracker_id,
+                json.dumps(frame_urls), best_frame_url,
+                face_count, frame_count, alert_id, now,
+            ))
+            movement_id = cur.lastrowid
+        conn.commit()
+    logger.info("Movement created id=%d tracker=%s frames=%d", movement_id, tracker_id, frame_count)
+    return movement_id
+
+
+def link_movement_to_alert(movement_id: int, alert_id: int) -> None:
+    """Update a movement record to link it to its generated alert."""
+    sql = "UPDATE movements SET alertId = %s WHERE id = %s"
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (alert_id, movement_id))
+        conn.commit()
 
 
 def create_event(camera_id: int, zone_id: int, person_id: Optional[int], alert_id: Optional[int], confidence: float, event_type: str, payload: Dict[str, Any]) -> int:
@@ -216,6 +286,34 @@ def update_person_identity(alert_id: int, correct_person_id: int) -> None:
             cur.execute(sql, (correct_person_id, alert_id))
         conn.commit()
     logger.info("Alert %d reassigned to person %d", alert_id, correct_person_id)
+
+
+def get_recent_alert_encoding(camera_id: int, window_sec: float) -> Optional[List[float]]:
+    """
+    Return the faceEncoding of the person from the most recent alert on this
+    camera created within the last window_sec seconds, or None if there is none.
+    Used for camera-level dedup before creating a new alert.
+    """
+    sql = """
+        SELECT p.faceEncoding
+        FROM alerts a
+        JOIN persons p ON p.id = a.personId
+        WHERE a.cameraId = %s
+          AND a.createdAt >= NOW() - INTERVAL %s SECOND
+          AND p.faceEncoding IS NOT NULL
+        ORDER BY a.createdAt DESC
+        LIMIT 1
+    """
+    with get_connection() as conn:
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            cur.execute(sql, (camera_id, window_sec))
+            row = cur.fetchone()
+    if row is None:
+        return None
+    try:
+        return json.loads(row["faceEncoding"])
+    except (json.JSONDecodeError, TypeError):
+        return None
 
 
 def log_false_positive(camera_id: int, reason: str) -> None:

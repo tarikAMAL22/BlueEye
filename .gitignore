@@ -114,3 +114,13 @@ client/public/__manus__/version.json
 
 # BlueEye uploads
 uploads/
+
+# Python
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+# AI Models
+*.pt
+*.pth
+*.weights

@@ -7,13 +7,25 @@ RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
+    libgl1 \
     cmake \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Install python packages directly as in the original
-RUN pip install --no-cache-dir opencv-python-headless mysql-connector-python pymysql DBUtils requests face_recognition numpy Pillow flask \
-    ultralytics retinaface
+# Install core python packages
+RUN pip install --no-cache-dir --default-timeout=1000 opencv-python-headless mysql-connector-python pymysql cryptography DBUtils requests numpy Pillow flask
+
+# Install face_recognition separately (large models)
+RUN pip install --no-cache-dir --default-timeout=1000 face_recognition
+
+# Install PyTorch CPU-only first (150MB instead of 530MB CUDA version)
+RUN pip install --no-cache-dir --default-timeout=1000 torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+# Install Ultralytics (YOLOv8) — torch already satisfied above
+RUN pip install --no-cache-dir --default-timeout=1000 ultralytics
+
+# Install RetinaFace
+RUN pip install --no-cache-dir --default-timeout=1000 retina-face
 
 # Copy the entire modular package
 COPY cv_worker_v2/ ./cv_worker_v2/
