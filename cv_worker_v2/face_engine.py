@@ -155,6 +155,16 @@ class FaceEngine:
             dist = float(face_recognition.face_distance([enc_a], enc_b)[0])
         return 1.0 - dist
 
+    def get_encodings_at_locations(
+        self,
+        rgb_frame: np.ndarray,
+        locations: List[FaceLocation],
+    ) -> List[Encoding]:
+        """Compute dlib encodings for pre-known face locations (no detection step)."""
+        with self._dlib_lock:
+            raw = face_recognition.face_encodings(rgb_frame, locations)
+        return [np.array(e, dtype=np.float64) for e in raw]
+
 
 # ── Module-level singleton ────────────────────────────────────────────────────
 engine = FaceEngine()

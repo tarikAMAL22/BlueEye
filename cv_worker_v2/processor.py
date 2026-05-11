@@ -328,6 +328,21 @@ def _do_persist(job: PersistJob) -> None:
     # Link alert back to movement record
     db.link_movement_to_alert(movement_id, alert_id)
 
+    # Create secondary alerts for any additional persons Haar detected in this frame
+    if multi_person and face_count > 1:
+        _create_secondary_alerts(
+            tracker=tracker,
+            camera_id=camera_id,
+            zone_id=zone_id,
+            haar_faces=haar_faces,
+            primary_encoding=encoding,
+            primary_location=tracker.best.location,
+            tolerance=tolerance,
+            settings=settings,
+            primary_movement_id=movement_id,
+            frame_snap_url=frame_snap_url,
+        )
+
     db.create_event(
         camera_id=camera_id, zone_id=zone_id, person_id=person_id,
         alert_id=alert_id, confidence=round(similarity * 100, 2),
@@ -854,6 +869,132 @@ def _flush_stale_trackers(
             to_remove.append(tid)
     for tid in to_remove:
         trackers.pop(tid, None)
+
+
+def _iou(loc_a: tuple, loc_b: tuple) -> float:
+    """Intersection-over-Union for two (top, right, bottom, left) bboxes."""
+    top_a, right_a, bottom_a, left_a = loc_a
+    top_b, right_b, bottom_b, left_b = loc_b
+    i_top    = max(top_a,    top_b)
+    i_right  = min(right_a,  right_b)
+    i_bottom = min(bottom_a, bottom_b)
+    i_left   = max(left_a,   left_b)
+    inter    = max(0, i_right - i_left) * max(0, i_bottom - i_top)
+    if inter == 0:
+        return 0.0
+    area_a = (right_a - left_a) * (bottom_a - top_a)
+    area_b = (right_b - left_b) * (bottom_b - top_b)
+    return inter / (area_a + area_b - inter)
+
+
+def _create_secondary_alerts(
+    tracker:            "SubjectTracker",
+    camera_id:          int,
+    zone_id:            int,
+    haar_faces,
+    primary_encoding:   np.ndarray,
+    primary_location:   Optional[tuple],
+    tolerance:          float,
+    settings:           dict,
+    primary_movement_id: int,
+    frame_snap_url:     str,
+) -> None:
+    """
+    For each Haar-detected face that doesn't overlap the primary tracked face,
+    compute a dlib encoding, identify the person, and create a secondary alert.
+    Called only when face_count > 1.
+    """
+    rgb_full = cv2.cvtColor(tracker.best.full_frame, cv2.COLOR_BGR2RGB)
+    h_full, w_full = tracker.best.full_frame.shape[:2]
+
+    for (hx, hy, hw, hh) in haar_faces:
+        # face_recognition location format: (top, right, bottom, left)
+        haar_loc = (hy, hx + hw, hy + hh, hx)
+
+        # Skip if this bbox heavily overlaps the primary tracked face
+        if primary_location and _iou(haar_loc, primary_location) > 0.4:
+            continue
+
+        # Get dlib encoding for this face location
+        try:
+            extra_encs = face_engine.get_encodings_at_locations(rgb_full, [haar_loc])
+        except Exception as exc:
+            logger.warning("[cam-%d] secondary encode failed: %s", camera_id, exc)
+            continue
+
+        if not extra_encs:
+            continue
+
+        extra_enc = extra_encs[0]
+
+        # Skip if dlib considers this the same face as the primary
+        if face_engine.compare_encodings(primary_encoding, extra_enc) > 0.85:
+            continue
+
+        # Identify
+        extra_person, extra_sim = face_engine.identify(extra_enc, tolerance=tolerance)
+        extra_person_id = extra_person["id"] if extra_person else None
+        is_blacklisted  = extra_person is not None and bool(extra_person.get("isBlacklisted"))
+
+        if extra_person is None:
+            extra_threat = "high"
+        elif is_blacklisted:
+            extra_threat = "critical"
+        else:
+            extra_threat = "low"
+
+        # Cooldown — bypass for blacklisted
+        if not is_blacklisted:
+            cooldown = int(settings.get("cvAlertCooldownSec", config.ALERT_COOLDOWN_SEC))
+            if not bio_memory.check_and_register(extra_enc, person_id=extra_person_id, cooldown_sec=cooldown):
+                logger.info(
+                    "[cam-%d] secondary person=%s SUPPRESSED by cooldown", camera_id, extra_person_id
+                )
+                continue
+
+        # Save face crop for the secondary person
+        pad = int(max(hw, hh) * 0.20)
+        x1, y1 = max(0, hx - pad), max(0, hy - pad)
+        x2, y2 = min(w_full, hx + hw + pad), min(h_full, hy + hh + pad)
+        sec_crop = tracker.best.full_frame[y1:y2, x1:x2]
+        sec_face_url = _save_image(sec_crop, prefix="face_secondary") if sec_crop.size > 0 else frame_snap_url
+
+        # Auto-register unknown secondary person
+        if extra_person_id is None:
+            extra_person_id = db.insert_unknown_person(extra_enc.tolist(), photo_url=sec_face_url)
+            extra_threat = "high"
+
+        # Create movement + alert for secondary person
+        sec_movement_id = db.create_movement(
+            camera_id=camera_id,
+            zone_id=zone_id,
+            tracker_id=tracker.tracker_id + "_sec",
+            frame_urls=tracker.clip_frame_urls,
+            best_frame_url=frame_snap_url,
+            face_crop_url=sec_face_url,
+            face_count=1,
+            frame_count=tracker.frame_count,
+            alert_id=None,
+        )
+        sec_alert_id = db.create_alert(
+            camera_id=camera_id,
+            zone_id=zone_id,
+            person_id=extra_person_id,
+            threat_level=extra_threat,
+            confidence=round(extra_sim * 100, 2),
+            face_snapshot_url=sec_face_url,
+            best_frame_url=frame_snap_url,
+            metadata={
+                "multiPersonFrame":   True,
+                "secondaryDetection": True,
+                "primaryMovementId":  primary_movement_id,
+            },
+        )
+        db.link_movement_to_alert(sec_movement_id, sec_alert_id)
+        logger.info(
+            "[cam-%d] Secondary alert #%d movement #%d person=%s threat=%s (multi-person frame)",
+            camera_id, sec_alert_id, sec_movement_id, extra_person_id, extra_threat,
+        )
 
 
 def _save_image(image: np.ndarray, prefix: str = "img") -> str:
