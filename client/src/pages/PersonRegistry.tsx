@@ -700,7 +700,8 @@ export default function PersonRegistry() {
               No unknown detections to review.
             </div>
           ) : (
-            <div className="grid grid-cols-2 gap-6 mt-2">
+            <div className="space-y-6 mt-2">
+            <div className="grid grid-cols-2 gap-6">
               {/* Left — photos */}
               <div className="space-y-3">
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Detection Photo</p>
@@ -951,6 +952,7 @@ export default function PersonRegistry() {
                   </div>
                 )}
               </div>
+            </div>
             </div>
           )}
         </DialogContent>
