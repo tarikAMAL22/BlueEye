@@ -675,7 +675,7 @@ export default function PersonRegistry() {
 
       {/* ── Manage Unknown Dialog ─────────────────────────────────────────── */}
       <Dialog open={manageOpen} onOpenChange={setManageOpen}>
-        <DialogContent className="bg-card border-border max-w-5xl w-full max-h-[92vh] flex flex-col gap-0 p-0">
+        <DialogContent className="bg-card border-border max-w-7xl w-full max-h-[96vh] flex flex-col gap-0 p-0">
           {/* ── Fixed header ── */}
           <DialogHeader className="flex-shrink-0 px-6 pt-6 pb-4 border-b border-border/40">
             <DialogTitle className="flex items-center gap-3 text-lg">
@@ -704,9 +704,9 @@ export default function PersonRegistry() {
               {/* Left — photos */}
               <div className="space-y-3">
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Detection Photo</p>
-                <div className="w-full rounded-xl bg-purple-500/10 border border-purple-500/20 overflow-hidden flex items-center justify-center" style={{minHeight: "280px", maxHeight: "340px"}}>
+                <div className="w-full rounded-xl bg-purple-500/10 border border-purple-500/20 overflow-hidden flex items-center justify-center" style={{minHeight: "360px", maxHeight: "460px"}}>
                   {currentUnknown.photoUrl ? (
-                    <img src={currentUnknown.photoUrl} alt="Unknown" className="w-full h-full object-cover" style={{maxHeight: "340px"}} />
+                    <img src={currentUnknown.photoUrl} alt="Unknown" className="w-full h-full object-cover" style={{maxHeight: "460px"}} />
                   ) : (
                     <Ghost className="w-20 h-20 text-purple-400/40" />
                   )}
