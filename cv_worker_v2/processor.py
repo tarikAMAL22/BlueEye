@@ -426,25 +426,36 @@ class DetectionWorkerPool:
                 logger.debug("%s height=%dpx >= min=%dpx OK", face_tag, face_h, min_h)
 
                 # ── 1b. Landmark count filter ───────────────────────────────
-                lm_min   = int(settings.get("cvLandmarkMinPoints", config.LANDMARK_MIN_POINTS))
-                lm_count = face_engine.count_landmarks(rgb, location)
-                if lm_count < lm_min:
-                    logger.info(
-                        "%s REJECTED landmarks=%d < min=%d",
-                        face_tag, lm_count, lm_min,
-                    )
-                    continue
-                logger.debug("%s landmarks=%d >= min=%d OK", face_tag, lm_count, lm_min)
+                # Only run the expensive dlib landmark call for the very first
+                # time a face is seen (no existing tracker). Once a tracker has
+                # accumulated ≥1 frame the subject is already validated — no
+                # need to re-run under the _dlib_lock every frame.
+                is_new_face = not any(
+                    not t.finalized and math.dist(t.centroid, _centroid(location)) < float(settings.get("cvSpatialMergePx", config.SPATIAL_MERGE_PX))
+                    for t in trackers.values()
+                )
+                if is_new_face:
+                    lm_min   = int(settings.get("cvLandmarkMinPoints", config.LANDMARK_MIN_POINTS))
+                    lm_count = face_engine.count_landmarks(rgb, location)
+                    if lm_count < lm_min:
+                        logger.info(
+                            "%s REJECTED landmarks=%d < min=%d",
+                            face_tag, lm_count, lm_min,
+                        )
+                        continue
+                    logger.debug("%s landmarks=%d >= min=%d OK", face_tag, lm_count, lm_min)
 
-                # ── 1c. Critical organs filter ──────────────────────────────
-                has_organs = face_engine.has_critical_organs(rgb, location)
-                if not has_organs:
-                    logger.info(
-                        "%s REJECTED missing critical organs (eyes/nose)",
-                        face_tag,
-                    )
-                    continue
-                logger.debug("%s critical organs OK", face_tag)
+                    # ── 1c. Critical organs filter ──────────────────────────
+                    has_organs = face_engine.has_critical_organs(rgb, location)
+                    if not has_organs:
+                        logger.info(
+                            "%s REJECTED missing critical organs (eyes/nose)",
+                            face_tag,
+                        )
+                        continue
+                    logger.debug("%s critical organs OK", face_tag)
+                else:
+                    logger.debug("%s landmark/organ checks SKIPPED — tracker already validated", face_tag)
 
                 # ── 2. Hybrid tracking ──────────────────────────────────────
                 centroid = _centroid(location)
