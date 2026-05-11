@@ -547,7 +547,7 @@ export const appRouter = router({
 
     currentStreamVideo: adminProcedure.query(() => {
       try {
-        return fs.readFileSync("/streamer_config/current_video.txt", "utf8").trim() || null;
+        return fs.readFileSync("/app/streamer_config/current_video.txt", "utf8").trim() || null;
       } catch {
         return null;
       }
@@ -557,8 +557,8 @@ export const appRouter = router({
       .input(z.object({ filename: z.string().min(1) }))
       .mutation(({ input }) => {
         const { filename } = input;
-        fs.mkdirSync("/streamer_config", { recursive: true });
-        fs.writeFileSync("/streamer_config/current_video.txt", filename, "utf8");
+        fs.mkdirSync("/app/streamer_config", { recursive: true });
+        fs.writeFileSync("/app/streamer_config/current_video.txt", filename, "utf8");
         return { success: true, streamUrl: "rtsp://mediamtx:8554/dev" };
       }),
   }),

@@ -115,6 +115,9 @@ client/public/__manus__/version.json
 # BlueEye uploads
 uploads/
 
+# Streamer runtime config (written at runtime, not source)
+streamer_config/
+
 # Python
 **/__pycache__/
 *.py[cod]
