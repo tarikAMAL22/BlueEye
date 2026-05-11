@@ -3,12 +3,15 @@ BlueEye CV Worker v2 — api_server.py
 Flask API server (port 5000) for identity correction ("Not Him" rematching).
 """
 
+import json
 import logging
 import os
 import threading
 from typing import Any, Dict
 
 import cv2
+import face_recognition
+import numpy as np
 from flask import Flask, jsonify, request
 
 from . import config
@@ -19,6 +22,9 @@ from .biometric_memory import memory as bio_memory
 _haar_cascade = cv2.CascadeClassifier(
     cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
 )
+
+# Serialise all face_recognition / dlib calls (not thread-safe)
+_encode_lock = threading.Lock()
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +142,80 @@ def invalidate_person():
         return jsonify({"error": "personId must be an integer"}), 400
     removed = bio_memory.invalidate(pid)
     return jsonify({"status": "invalidated", "personId": pid, "removedEntries": removed})
+
+
+# ─── Compute face encoding from saved photo ───────────────────────────────────
+
+@app.post("/api/encode-person")
+def encode_person():
+    """
+    Compute a face encoding from a person's stored photo and persist it.
+    Body: { "personId": 123 }
+    Returns: { "status": "ok"|"no_face"|"no_photo", "personId": 123 }
+    """
+    import pymysql.cursors as _cursors  # noqa: F811
+
+    body = request.get_json(force=True, silent=True) or {}
+    person_id = body.get("personId")
+
+    if not isinstance(person_id, int):
+        return jsonify({"error": "personId must be an integer"}), 400
+
+    # 1. Fetch person photo URL from DB
+    with db.get_connection() as conn:
+        with conn.cursor(_cursors.DictCursor) as cur:
+            cur.execute("SELECT id, photoUrl FROM persons WHERE id = %s", (person_id,))
+            person = cur.fetchone()
+
+    if not person:
+        return jsonify({"error": f"Person {person_id} not found"}), 404
+
+    photo_url = (person.get("photoUrl") or "").strip()
+    if not photo_url:
+        return jsonify({"status": "no_photo", "personId": person_id})
+
+    # 2. Resolve photo URL to an absolute filesystem path
+    filename = os.path.basename(photo_url)
+    candidates = [
+        os.path.join("/app/client/public", photo_url.lstrip("/")),
+        os.path.join(os.getcwd(), "client/public", photo_url.lstrip("/")),
+        os.path.join(config.UPLOAD_DIR, filename),
+    ]
+    abs_path = next((p for p in candidates if os.path.exists(p)), None)
+
+    if abs_path is None:
+        logger.warning("encode-person: photo not found for person %d: %s", person_id, photo_url)
+        return jsonify({"status": "no_photo", "personId": person_id, "detail": f"file not found: {photo_url}"})
+
+    # 3. Load image and compute encoding (serialised — dlib is not thread-safe)
+    img = cv2.imread(abs_path)
+    if img is None:
+        return jsonify({"error": f"Could not read image: {abs_path}"}), 422
+
+    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+    with _encode_lock:
+        locations = face_recognition.face_locations(rgb, model="hog")
+        if not locations:
+            logger.info("encode-person: no face found for person %d in %s", person_id, abs_path)
+            return jsonify({"status": "no_face", "personId": person_id})
+        encodings = face_recognition.face_encodings(rgb, locations)
+
+    if not encodings:
+        return jsonify({"status": "no_face", "personId": person_id})
+
+    # 4. Persist the encoding (use the first/largest detected face)
+    encoding_json = json.dumps(encodings[0].tolist())
+    with db.get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE persons SET faceEncoding = %s WHERE id = %s",
+                (encoding_json, person_id),
+            )
+        conn.commit()
+
+    logger.info("encode-person: stored encoding for person %d from %s", person_id, abs_path)
+    return jsonify({"status": "ok", "personId": person_id})
 
 
 # ─── Server launcher ─────────────────────────────────────────────────────────

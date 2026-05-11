@@ -37,7 +37,8 @@ export default function PersonRegistry() {
   const createMutation = trpc.persons.create.useMutation();
   const updateMutation = trpc.persons.update.useMutation();
   const deleteMutation = trpc.persons.delete.useMutation();
-  const mergeMutation  = trpc.persons.mergePersons.useMutation();
+  const mergeMutation          = trpc.persons.mergePersons.useMutation();
+  const computeEncodingMutation = trpc.persons.computeEncoding.useMutation();
 
   const onSubmit = async (data: any) => {
     try {
@@ -831,6 +832,28 @@ export default function PersonRegistry() {
                       {knownMatches.length} AI match{knownMatches.length !== 1 ? "es" : ""}
                     </Badge>
                   )}
+                  <button
+                    type="button"
+                    title="Compute face encoding from this person's photo so biometric matching works"
+                    disabled={computeEncodingMutation.isPending || !currentUnknown}
+                    onClick={async () => {
+                      if (!currentUnknown) return;
+                      try {
+                        const result = await computeEncodingMutation.mutateAsync({ personId: currentUnknown.id });
+                        if ((result as any).status === "ok") {
+                          toast.success("Encoding computed — refreshing matches...");
+                          refetchMatches();
+                        } else {
+                          toast.warning(`No face detected (status: ${(result as any).status})`);
+                        }
+                      } catch (e: any) {
+                        toast.error(`Encoding failed: ${e.message}`);
+                      }
+                    }}
+                    className="text-[10px] px-2 py-1 rounded border border-blue-500/30 text-blue-400 hover:bg-blue-500/10 transition-colors disabled:opacity-40"
+                  >
+                    {computeEncodingMutation.isPending ? "Computing..." : "Compute Encoding"}
+                  </button>
                 </div>
                 <div className="flex items-center gap-3">
                   <div className="flex items-center gap-2">

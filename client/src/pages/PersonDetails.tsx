@@ -78,6 +78,7 @@ export default function PersonDetails() {
   const updateMutation = trpc.persons.update.useMutation();
   const mergeMutation = trpc.persons.mergePersons.useMutation();
   const notHimMutation = trpc.alerts.notHim.useMutation();
+  const computeEncodingMutation = trpc.persons.computeEncoding.useMutation();
 
   const handleEditStart = () => {
     if (person) {
@@ -349,9 +350,32 @@ export default function PersonDetails() {
                 />
               </div>
               <div className="flex items-center gap-2">
-                <Button 
-                  variant="ghost" 
-                  size="icon" 
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 px-3 text-xs gap-1.5 border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                  disabled={computeEncodingMutation.isPending}
+                  title="Compute face encoding from the profile photo so this person appears in biometric matches"
+                  onClick={async () => {
+                    try {
+                      const result = await computeEncodingMutation.mutateAsync({ personId });
+                      if ((result as any).status === "ok") {
+                        toast.success("Encoding computed — refreshing matches...");
+                        refetchMatches();
+                      } else {
+                        toast.warning(`No face detected in photo (status: ${(result as any).status})`);
+                      }
+                    } catch (e: any) {
+                      toast.error(`Encoding failed: ${e.message}`);
+                    }
+                  }}
+                >
+                  <Scan className={`w-3.5 h-3.5 ${computeEncodingMutation.isPending ? "animate-pulse" : ""}`} />
+                  {computeEncodingMutation.isPending ? "Computing..." : "Compute Encoding"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
                   className={`h-8 w-8 text-muted-foreground hover:text-blue-400 ${isMatchesLoading ? 'animate-spin' : ''}`}
                   onClick={() => refetchMatches()}
                   title="Scan for new matches"

@@ -177,7 +177,15 @@ export const appRouter = router({
           activityHistory: [],
           isBlacklisted: input.isBlacklisted ?? false,
         });
-        return { insertId: (result as any).insertId as number };
+        const newId = (result as any).insertId as number;
+        if (finalPhotoUrl) {
+          fetch("http://cv-worker:5000/api/encode-person", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ personId: newId }),
+          }).catch(e => console.warn("[Router] Background encoding failed for person", newId, e));
+        }
+        return { insertId: newId };
       }),
     
     update: adminProcedure
@@ -211,10 +219,18 @@ export const appRouter = router({
           }
         }
 
-        return db.updatePerson(id, { 
-          ...data, 
-          photoUrl: finalPhotoUrl 
+        const updated = await db.updatePerson(id, {
+          ...data,
+          photoUrl: finalPhotoUrl
         });
+        if (finalPhotoUrl) {
+          fetch("http://cv-worker:5000/api/encode-person", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ personId: id }),
+          }).catch(e => console.warn("[Router] Background encoding failed for person", id, e));
+        }
+        return updated;
       }),
     
     delete: adminProcedure
@@ -236,6 +252,21 @@ export const appRouter = router({
       .input(z.object({ sourceId: z.number(), targetId: z.number() }))
       .mutation(async ({ input }) => {
         return db.mergePersonRecords(input.sourceId, input.targetId);
+      }),
+
+    computeEncoding: protectedProcedure
+      .input(z.object({ personId: z.number() }))
+      .mutation(async ({ input }) => {
+        const response = await fetch("http://cv-worker:5000/api/encode-person", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ personId: input.personId }),
+        });
+        if (!response.ok) {
+          const err = await response.json() as any;
+          throw new Error(err.error || "Encoding failed");
+        }
+        return await response.json();
       }),
   }),
 
