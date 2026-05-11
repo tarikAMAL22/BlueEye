@@ -96,7 +96,7 @@ def fetch_all_persons() -> List[Dict[str, Any]]:
     Load all persons with a stored faceEncoding from the `persons` table.
     Returns a list of dicts: {id, name, faceEncoding (list[float]), ...}
     """
-    sql = "SELECT id, name, faceEncoding FROM persons WHERE faceEncoding IS NOT NULL"
+    sql = "SELECT id, name, faceEncoding, isBlacklisted FROM persons WHERE faceEncoding IS NOT NULL"
     with get_connection() as conn:
         with conn.cursor(pymysql.cursors.DictCursor) as cur:
             cur.execute(sql)

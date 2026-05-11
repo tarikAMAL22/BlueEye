@@ -254,8 +254,13 @@ def _do_persist(job: PersistJob) -> None:
     # Identify person
     tolerance = float(settings.get("cvRecognitionTolerance", 0.50))
     person, similarity = face_engine.identify(encoding, tolerance=tolerance)
-    person_id    = person["id"] if person else None
-    threat_level = "low" if person else "high"
+    person_id = person["id"] if person else None
+    if person is None:
+        threat_level = "high"
+    elif person.get("isBlacklisted"):
+        threat_level = "critical"
+    else:
+        threat_level = "low"
 
     # Log movement record (always — even if cooldown suppresses the alert)
     movement_id = db.create_movement(
