@@ -675,7 +675,7 @@ export default function PersonRegistry() {
 
       {/* ── Manage Unknown Dialog ─────────────────────────────────────────── */}
       <Dialog open={manageOpen} onOpenChange={setManageOpen}>
-        <DialogContent className="bg-card border-border max-w-7xl w-full max-h-[96vh] flex flex-col gap-0 p-0">
+        <DialogContent className="bg-card border-border w-[92vw] max-w-[1600px] max-h-[96vh] flex flex-col gap-0 p-0">
           {/* ── Fixed header ── */}
           <DialogHeader className="flex-shrink-0 px-6 pt-6 pb-4 border-b border-border/40">
             <DialogTitle className="flex items-center gap-3 text-lg">
