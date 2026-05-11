@@ -699,13 +699,14 @@ export default function PersonRegistry() {
 
       {/* ── Manage Unknown Dialog ─────────────────────────────────────────── */}
       <Dialog open={manageOpen} onOpenChange={setManageOpen}>
-        <DialogContent className="bg-card border-border max-w-3xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-3">
+        <DialogContent className="bg-card border-border max-w-5xl w-full max-h-[92vh] flex flex-col gap-0 p-0">
+          {/* ── Fixed header ── */}
+          <DialogHeader className="flex-shrink-0 px-6 pt-6 pb-4 border-b border-border/40">
+            <DialogTitle className="flex items-center gap-3 text-lg">
               <Ghost className="w-5 h-5 text-purple-400" />
               Review Unknown Detections
               {unknownTotal > 0 && (
-                <Badge variant="outline" className="bg-purple-500/10 text-purple-300 border-purple-500/30 text-xs">
+                <Badge variant="outline" className="bg-purple-500/10 text-purple-300 border-purple-500/30 text-sm">
                   {unknownIdx + 1} / {unknownTotal}
                 </Badge>
               )}
@@ -715,21 +716,23 @@ export default function PersonRegistry() {
             </DialogDescription>
           </DialogHeader>
 
+          {/* ── Scrollable body ── */}
+          <div className="flex-1 overflow-y-auto px-6 py-6">
           {!currentUnknown ? (
             <div className="py-10 text-center text-muted-foreground italic">
               No unknown detections to review.
             </div>
           ) : (
-            <div className="space-y-6 mt-2">
-            <div className="grid grid-cols-2 gap-6">
+            <div className="space-y-6">
+            <div className="grid grid-cols-2 gap-8">
               {/* Left — photos */}
               <div className="space-y-3">
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Detection Photo</p>
-                <div className="w-full aspect-square rounded-xl bg-purple-500/10 border border-purple-500/20 overflow-hidden flex items-center justify-center">
+                <div className="w-full rounded-xl bg-purple-500/10 border border-purple-500/20 overflow-hidden flex items-center justify-center" style={{minHeight: "280px", maxHeight: "340px"}}>
                   {currentUnknown.photoUrl ? (
-                    <img src={currentUnknown.photoUrl} alt="Unknown" className="w-full h-full object-cover" />
+                    <img src={currentUnknown.photoUrl} alt="Unknown" className="w-full h-full object-cover" style={{maxHeight: "340px"}} />
                   ) : (
-                    <Ghost className="w-16 h-16 text-purple-400/40" />
+                    <Ghost className="w-20 h-20 text-purple-400/40" />
                   )}
                 </div>
                 {recentAlert?.bestFrameSnapshotUrl && (
@@ -1014,6 +1017,7 @@ export default function PersonRegistry() {
             </div>
             </div>
           )}
+          </div>{/* end scrollable body */}
         </DialogContent>
       </Dialog>
     </div>
