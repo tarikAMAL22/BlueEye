@@ -187,6 +187,7 @@ export default function PersonRegistry() {
     setManageOpen(true);
   };
 
+  // Used only for Skip — does NOT remove the current item so index advances normally.
   const goNext = () => {
     const next = unknownIdx + 1;
     if (next < unknownTotal) {
@@ -205,6 +206,17 @@ export default function PersonRegistry() {
     }
   };
 
+  // Called after any action that *removes* the current person from unknownPersons.
+  // The list shrinks by 1, so the next person is now at the same index — no increment needed.
+  const advanceAfterRemoval = () => {
+    if (unknownIdx >= unknownTotal - 1) {
+      setManageOpen(false);
+      toast.success("All unknown detections reviewed.");
+    } else {
+      resetDecisionState();
+    }
+  };
+
   const handleIdentify = async () => {
     if (!currentUnknown || !resolvedName.trim()) return;
     try {
@@ -215,8 +227,8 @@ export default function PersonRegistry() {
         isBlacklisted: resolvedBlacklist,
       });
       toast.success(`${resolvedName} identified and saved.`);
-      refetch();
-      goNext();
+      await refetch();
+      advanceAfterRemoval();
     } catch (e: any) {
       toast.error(e.message);
     }
@@ -230,7 +242,7 @@ export default function PersonRegistry() {
       await mergeMutation.mutateAsync({ sourceId: currentUnknown.id, targetId });
       toast.success(`Merged into ${targetName} — all history transferred.`);
       await refetch();
-      goNext();
+      advanceAfterRemoval();
     } catch (e: any) {
       toast.error(e.message);
     }
@@ -242,10 +254,7 @@ export default function PersonRegistry() {
       await deleteMutation.mutateAsync({ id: currentUnknown.id });
       toast.success("Unknown detection deleted.");
       await refetch();
-      // Stay at same index (list shrinks) or close if exhausted
-      setUnknownIdx(i => Math.min(i, unknownTotal - 2));
-      if (unknownTotal <= 1) setManageOpen(false);
-      resetDecisionState();
+      advanceAfterRemoval();
     } catch (e: any) {
       toast.error(e.message);
     }
