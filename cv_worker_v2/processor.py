@@ -275,32 +275,38 @@ def _do_persist(job: PersistJob) -> None:
         alert_id=None,  # filled in below if alert is created
     )
 
-    # Cooldown / dedup check
-    cooldown = int(settings.get("cvAlertCooldownSec", config.ALERT_COOLDOWN_SEC))
-    if not bio_memory.check_and_register(encoding, person_id=person_id, cooldown_sec=cooldown):
-        logger.info(
-            "[cam-%d] tracker=%s SUPPRESSED by cooldown (person=%s) — movement #%d logged",
-            camera_id, tracker.tracker_id, person_id, movement_id,
-        )
-        return
+    is_blacklisted = person is not None and bool(person.get("isBlacklisted"))
 
-    # Camera-level dedup: compare 1-to-1 against the last alert on this camera.
-    # compare_encodings returns 1 - face_distance, so the equivalent of the
-    # recognition tolerance (a distance) is: similarity >= 1 - tolerance.
-    dedup_window = float(settings.get("cvCameraDedupWindowSec", config.CAMERA_DEDUP_WINDOW_SEC))
-    if dedup_window > 0:
-        recent_enc_list = db.get_recent_alert_encoding(camera_id, dedup_window)
-        if recent_enc_list is not None:
-            recent_enc = np.array(recent_enc_list, dtype=np.float64)
-            dedup_sim = face_engine.compare_encodings(encoding, recent_enc)
-            recog_tol = float(settings.get("cvRecognitionTolerance", config.RECOGNITION_TOLERANCE))
-            dedup_threshold = 1.0 - recog_tol   # e.g. 1 - 0.50 = 0.50
-            if dedup_sim >= dedup_threshold:
-                logger.info(
-                    "[cam-%d] tracker=%s DEDUP — same face as last camera alert (sim=%.3f >= %.3f, window=%.1fs) — movement #%d logged, alert suppressed",
-                    camera_id, tracker.tracker_id, dedup_sim, dedup_threshold, dedup_window, movement_id,
-                )
-                return
+    # Cooldown / dedup check — always bypassed for blacklisted persons
+    if not is_blacklisted:
+        cooldown = int(settings.get("cvAlertCooldownSec", config.ALERT_COOLDOWN_SEC))
+        if not bio_memory.check_and_register(encoding, person_id=person_id, cooldown_sec=cooldown):
+            logger.info(
+                "[cam-%d] tracker=%s SUPPRESSED by cooldown (person=%s) — movement #%d logged",
+                camera_id, tracker.tracker_id, person_id, movement_id,
+            )
+            return
+
+        # Camera-level dedup: compare 1-to-1 against the last alert on this camera.
+        dedup_window = float(settings.get("cvCameraDedupWindowSec", config.CAMERA_DEDUP_WINDOW_SEC))
+        if dedup_window > 0:
+            recent_enc_list = db.get_recent_alert_encoding(camera_id, dedup_window)
+            if recent_enc_list is not None:
+                recent_enc = np.array(recent_enc_list, dtype=np.float64)
+                dedup_sim = face_engine.compare_encodings(encoding, recent_enc)
+                recog_tol = float(settings.get("cvRecognitionTolerance", config.RECOGNITION_TOLERANCE))
+                dedup_threshold = 1.0 - recog_tol   # e.g. 1 - 0.50 = 0.50
+                if dedup_sim >= dedup_threshold:
+                    logger.info(
+                        "[cam-%d] tracker=%s DEDUP — same face as last camera alert (sim=%.3f >= %.3f, window=%.1fs) — movement #%d logged, alert suppressed",
+                        camera_id, tracker.tracker_id, dedup_sim, dedup_threshold, dedup_window, movement_id,
+                    )
+                    return
+    else:
+        logger.info(
+            "[cam-%d] tracker=%s BLACKLISTED — bypassing cooldown/dedup, forcing critical alert",
+            camera_id, tracker.tracker_id,
+        )
 
     # Auto-register unknown
     if person_id is None:

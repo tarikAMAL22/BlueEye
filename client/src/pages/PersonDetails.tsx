@@ -6,13 +6,13 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { 
-  User, 
-  Shield, 
-  History, 
-  ArrowLeft, 
-  CheckCircle, 
-  AlertCircle, 
+import {
+  User,
+  Shield,
+  History,
+  ArrowLeft,
+  CheckCircle,
+  AlertCircle,
   Link as LinkIcon,
   Trash2,
   Scan,
@@ -28,7 +28,8 @@ import {
   UserMinus,
   Video,
   Camera,
-  Check
+  Check,
+  AlertTriangle,
 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
@@ -110,9 +111,20 @@ export default function PersonDetails() {
       });
       toast.success("Profile updated");
       setIsEditing(false);
-      window.location.reload(); // Refresh to get updated data
+      window.location.reload();
     } catch (error: any) {
       toast.error(`Update failed: ${error.message}`);
+    }
+  };
+
+  const handleToggleBlacklist = async () => {
+    const next = !person.isBlacklisted;
+    try {
+      await updateMutation.mutateAsync({ id: personId, isBlacklisted: next });
+      toast.success(next ? "Added to watchlist — critical alerts enabled." : "Removed from watchlist.");
+      window.location.reload();
+    } catch (error: any) {
+      toast.error(`Failed: ${error.message}`);
     }
   };
 
@@ -220,8 +232,23 @@ export default function PersonDetails() {
               <h1 className="text-3xl font-bold text-primary flex items-center gap-3">
                 {person.name}
                 <Badge variant="outline" className="text-xs uppercase tracking-widest">{person.role}</Badge>
+                {person.isBlacklisted && (
+                  <Badge className="bg-red-600 text-white text-[10px] uppercase tracking-wider animate-pulse px-2 py-0.5 gap-1">
+                    <AlertTriangle className="w-3 h-3" /> WATCHLIST
+                  </Badge>
+                )}
                 <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary" onClick={handleEditStart}>
                   <Edit2 className="w-4 h-4" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className={`h-8 px-3 text-xs gap-1.5 transition-colors ${person.isBlacklisted ? "border-red-500/50 text-red-400 hover:bg-red-500/10 bg-red-500/5" : "border-border/50 text-muted-foreground hover:border-red-500/50 hover:text-red-400 hover:bg-red-500/5"}`}
+                  disabled={updateMutation.isPending}
+                  onClick={handleToggleBlacklist}
+                >
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  {person.isBlacklisted ? "Remove from Watchlist" : "Add to Watchlist"}
                 </Button>
               </h1>
               <p className="text-muted-foreground">ID: {person.id} • Created {new Date(person.createdAt).toLocaleDateString()}</p>
