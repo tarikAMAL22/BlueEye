@@ -155,6 +155,25 @@ export default function PersonRegistry() {
     !m.name.toLowerCase().startsWith("unknown-")
   );
 
+  // Autocomplete results: all persons (incl. unknowns for duplicate merges), scored by name relevance
+  const manualSearchResults = useMemo(() => {
+    if (!matchSearchQuery.trim() || !persons) return [];
+    const q = matchSearchQuery.toLowerCase().trim();
+    return (persons as any[])
+      .filter((p: any) => p.id !== currentUnknown?.id)
+      .map((p: any) => {
+        const name = p.name.toLowerCase();
+        let score = 0;
+        if (name === q) score = 3;
+        else if (name.startsWith(q)) score = 2;
+        else if (name.includes(q) || String(p.id).includes(q)) score = 1;
+        return { ...p, _score: score };
+      })
+      .filter((p: any) => p._score > 0)
+      .sort((a: any, b: any) => b._score - a._score)
+      .slice(0, 5);
+  }, [matchSearchQuery, persons, currentUnknown?.id]);
+
   const resetDecisionState = () => {
     setResolvedName("");
     setResolvedRole("staff");
@@ -920,57 +939,74 @@ export default function PersonRegistry() {
                 </p>
               )}
 
-              {/* Manual search */}
-              <div className="space-y-2">
+              {/* Manual identity link — all persons, autocomplete, top 5 by score */}
+              <div className="space-y-1.5">
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+                  <LinkIcon className="w-3 h-3" />
+                  Manual Identity Link
+                  <span className="normal-case font-normal text-muted-foreground/60">— merge duplicates or assign to any person</span>
+                </p>
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/50" />
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/50 pointer-events-none" />
                   <Input
-                    placeholder="Search known persons by name or ID..."
+                    placeholder="Type a name to search all persons…"
                     className="pl-10 bg-background/50 border-border/50 text-sm"
                     value={matchSearchQuery}
                     onChange={e => setMatchSearchQuery(e.target.value)}
                   />
+                  {matchSearchQuery && (
+                    <button
+                      type="button"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                      onClick={() => setMatchSearchQuery("")}
+                    >
+                      ×
+                    </button>
+                  )}
                 </div>
-                {matchSearchQuery && (
-                  <div className="max-h-44 overflow-y-auto space-y-1.5 pr-1">
-                    {knownPersons
-                      .filter((p: any) =>
-                        p.name.toLowerCase().includes(matchSearchQuery.toLowerCase()) ||
-                        String(p.id).includes(matchSearchQuery)
-                      )
-                      .slice(0, 8)
-                      .map((candidate: any) => (
-                        <div key={candidate.id} className="flex items-center justify-between p-2.5 rounded-lg bg-background/30 border border-border/40 hover:border-blue-500/40 transition-all group">
-                          <div className="flex items-center gap-2.5">
-                            <div className="w-9 h-9 rounded overflow-hidden border border-border/50 bg-muted flex-shrink-0">
+
+                {matchSearchQuery.trim() && (
+                  <div className="rounded-lg border border-border/60 bg-card shadow-lg overflow-hidden">
+                    {manualSearchResults.length > 0 ? (
+                      manualSearchResults.map((candidate: any, idx: number) => {
+                        const isUnknown = candidate.role.toLowerCase() === "unknown" || candidate.name.toLowerCase().startsWith("unknown-");
+                        return (
+                          <div
+                            key={candidate.id}
+                            className={`flex items-center gap-3 px-3 py-2.5 hover:bg-muted/40 transition-colors group cursor-default ${idx > 0 ? "border-t border-border/30" : ""}`}
+                          >
+                            <div className="w-8 h-8 rounded-md overflow-hidden border border-border/50 bg-muted flex-shrink-0">
                               {candidate.photoUrl
                                 ? <img src={candidate.photoUrl} className="w-full h-full object-cover" />
-                                : <User className="w-4 h-4 m-2.5 text-muted-foreground" />
+                                : <User className="w-4 h-4 m-2 text-muted-foreground" />
                               }
                             </div>
-                            <div>
-                              <p className="text-sm font-bold leading-tight">{candidate.name}</p>
-                              <p className="text-[10px] text-muted-foreground">{candidate.role} · #{candidate.id}</p>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-semibold leading-tight truncate">{candidate.name}</p>
+                              <div className="flex items-center gap-1.5 mt-0.5">
+                                <span className={`text-[9px] px-1.5 py-px rounded-full border font-medium ${isUnknown ? "border-purple-500/30 text-purple-400 bg-purple-500/10" : "border-border/50 text-muted-foreground bg-muted/30"}`}>
+                                  {isUnknown ? "unknown" : candidate.role}
+                                </span>
+                                <span className="text-[9px] text-muted-foreground">#{candidate.id}</span>
+                              </div>
                             </div>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 px-2.5 text-xs gap-1.5 text-blue-400 hover:text-blue-300 hover:bg-blue-400/10 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+                              onClick={() => handleAssignTo(candidate.id, candidate.name)}
+                              disabled={mergeMutation.isPending}
+                            >
+                              <LinkIcon className="w-3.5 h-3.5" />
+                              Merge
+                            </Button>
                           </div>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="text-blue-400 hover:text-blue-300 hover:bg-blue-400/10 opacity-0 group-hover:opacity-100 transition-opacity gap-1.5 h-7 px-2 text-xs"
-                            onClick={() => handleAssignTo(candidate.id, candidate.name)}
-                            disabled={mergeMutation.isPending}
-                          >
-                            <LinkIcon className="w-3.5 h-3.5" />
-                            Assign
-                          </Button>
-                        </div>
-                      ))
-                    }
-                    {knownPersons.filter((p: any) =>
-                      p.name.toLowerCase().includes(matchSearchQuery.toLowerCase()) ||
-                      String(p.id).includes(matchSearchQuery)
-                    ).length === 0 && (
-                      <p className="text-center py-3 text-xs text-muted-foreground">No known persons match "{matchSearchQuery}"</p>
+                        );
+                      })
+                    ) : (
+                      <div className="px-4 py-3 text-xs text-muted-foreground text-center">
+                        No persons match "{matchSearchQuery}"
+                      </div>
                     )}
                   </div>
                 )}
