@@ -264,6 +264,7 @@ def _do_persist(job: PersistJob) -> None:
         tracker_id=tracker.tracker_id,
         frame_urls=tracker.clip_frame_urls,
         best_frame_url=frame_snap_url,
+        face_crop_url=face_snap_url,
         face_count=face_count,
         frame_count=tracker.frame_count,
         alert_id=None,  # filled in below if alert is created
@@ -278,14 +279,17 @@ def _do_persist(job: PersistJob) -> None:
         )
         return
 
-    # Camera-level dedup: compare 1-to-1 against the last alert on this camera
+    # Camera-level dedup: compare 1-to-1 against the last alert on this camera.
+    # compare_encodings returns 1 - face_distance, so the equivalent of the
+    # recognition tolerance (a distance) is: similarity >= 1 - tolerance.
     dedup_window = float(settings.get("cvCameraDedupWindowSec", config.CAMERA_DEDUP_WINDOW_SEC))
     if dedup_window > 0:
         recent_enc_list = db.get_recent_alert_encoding(camera_id, dedup_window)
         if recent_enc_list is not None:
             recent_enc = np.array(recent_enc_list, dtype=np.float64)
             dedup_sim = face_engine.compare_encodings(encoding, recent_enc)
-            dedup_threshold = float(settings.get("cvBiometricMergeSim", config.BIOMETRIC_MERGE_SIM))
+            recog_tol = float(settings.get("cvRecognitionTolerance", config.RECOGNITION_TOLERANCE))
+            dedup_threshold = 1.0 - recog_tol   # e.g. 1 - 0.50 = 0.50
             if dedup_sim >= dedup_threshold:
                 logger.info(
                     "[cam-%d] tracker=%s DEDUP — same face as last camera alert (sim=%.3f >= %.3f, window=%.1fs) — movement #%d logged, alert suppressed",
@@ -479,11 +483,17 @@ class DetectionWorkerPool:
                     continue
                 _update_best_frame(tracker, frame_bgr, crop, encoding, location)
 
-                # Sample frames for the motion clip (max 12, every 3rd detection)
+                # Sample frames for the motion clip (max 12, every 3rd detection).
+                # Prefix includes the frame's capture timestamp (ms, zero-padded to 13
+                # digits) so filenames sort lexicographically = chronologically.
+                # This survives concurrent detection workers that may append out of order.
                 if tracker.frame_count % 3 == 0 and len(tracker.clip_frame_urls) < 12:
                     h_fr2, w_fr2 = frame_bgr.shape[:2]
                     clip_small = cv2.resize(frame_bgr, (w_fr2 // 2, h_fr2 // 2))
-                    tracker.clip_frame_urls.append(_save_image(clip_small, prefix="clip"))
+                    ts_ms = int(job.captured_at * 1000)
+                    tracker.clip_frame_urls.append(
+                        _save_image(clip_small, prefix=f"clip_{ts_ms:013d}")
+                    )
 
                 tracker.last_seen    = time.time()
                 tracker.frame_count += 1
@@ -500,6 +510,7 @@ class DetectionWorkerPool:
                         )
                     else:
                         tracker.finalized = True
+                        tracker.clip_frame_urls.sort()  # chronological order via embedded timestamp
                         logger.info(
                             "[cam-%d] tracker=%s buffer elapsed (%.1fs >= %.1fs, frames=%d) → queued for persistence",
                             job.camera_id, tracker.tracker_id, elapsed, buffer_sec, tracker.frame_count,
@@ -705,11 +716,19 @@ def _find_or_create_tracker(
     settings: dict,
 ) -> SubjectTracker:
     """Hybrid spatial + biometric tracker lookup. Call under cam_lock."""
-    spatial_px   = float(settings.get("cvSpatialMergePx",   config.SPATIAL_MERGE_PX))
-    biometric_sim = float(settings.get("cvBiometricMergeSim", config.BIOMETRIC_MERGE_SIM))
+    spatial_px    = float(settings.get("cvSpatialMergePx",      config.SPATIAL_MERGE_PX))
+    biometric_sim = float(settings.get("cvBiometricMergeSim",   config.BIOMETRIC_MERGE_SIM))
+    # Spatial merge uses a separate, looser similarity floor.
+    # Same person across consecutive frames scores ~0.40–0.70 (face angle/lighting
+    # variation); clearly different people score <0.30 even when spatially close.
+    # Using recognition_tolerance as the floor (1 - 0.50 = 0.50) was too strict
+    # and created false rejections at ~0.45.  SPATIAL_BIOMETRIC_SIM = 0.35 gives
+    # enough headroom while still blocking obviously different faces.
+    spatial_sim_min = float(settings.get("cvSpatialBiometricSim", config.SPATIAL_BIOMETRIC_SIM))
 
-    # Spatial — finalized trackers are excluded so their best frame is never
-    # overwritten after a PersistJob has been queued for them.
+    # Spatial — find the closest non-finalized tracker within the threshold.
+    # Guard with a loose biometric check so a different person who walks into
+    # the same spot is never merged into the existing tracker.
     best_spatial: Optional[SubjectTracker] = None
     best_dist = float("inf")
     for t in trackers.values():
@@ -721,10 +740,18 @@ def _find_or_create_tracker(
             best_spatial = t
 
     if best_spatial:
-        best_spatial.centroid = centroid
-        return best_spatial
+        sim = face_engine.compare_encodings(best_spatial.encoding, encoding)
+        if sim >= spatial_sim_min:
+            best_spatial.centroid = centroid
+            return best_spatial
+        else:
+            logger.info(
+                "[cam-%d] Spatial candidate tracker=%s REJECTED (sim=%.3f < %.3f) — different person at same location",
+                camera_id, best_spatial.tracker_id, sim, spatial_sim_min,
+            )
+            # Fall through to biometric search, then new tracker.
 
-    # Biometric fallback — also skip finalized trackers
+    # Biometric fallback (no spatial hint) — strict threshold
     for t in trackers.values():
         if t.finalized:
             continue
@@ -786,6 +813,7 @@ def _flush_stale_trackers(
                     camera_id, tid, t.frame_count, min_frames, inactive,
                 )
             else:
+                t.clip_frame_urls.sort()  # chronological order via embedded timestamp
                 logger.info(
                     "[cam-%d] tracker=%s STALE (inactive=%.1fs > %.1fs, frames=%d) → queued for persistence",
                     camera_id, tid, inactive, inactivity_sec, t.frame_count,

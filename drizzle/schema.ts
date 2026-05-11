@@ -137,6 +137,28 @@ export type AccessRule = typeof accessRules.$inferSelect;
 export type InsertAccessRule = typeof accessRules.$inferInsert;
 
 /**
+ * Movements table: every face detection tracker, including cooldown-suppressed ones.
+ * frameUrls is a JSON array of /uploads/clip_xxx.jpg paths for the flipbook player.
+ */
+export const movements = mysqlTable("movements", {
+  id:           int("id").autoincrement().primaryKey(),
+  cameraId:     int("cameraId").notNull(),
+  zoneId:       int("zoneId").notNull().default(1),
+  trackerId:    varchar("trackerId", { length: 64 }).notNull(),
+  frameUrls:    json("frameUrls").$type<string[]>(),
+  bestFrameUrl: varchar("bestFrameUrl", { length: 512 }),
+  faceCropUrl:  varchar("faceCropUrl",  { length: 512 }),
+  faceCount:    int("faceCount").notNull().default(0),
+  frameCount:   int("frameCount").notNull().default(0),
+  alertId:      int("alertId"),
+  timestamp:    timestamp("timestamp").defaultNow().notNull(),
+  createdAt:    timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type Movement = typeof movements.$inferSelect;
+export type InsertMovement = typeof movements.$inferInsert;
+
+/**
  * Settings table: system-wide configuration
  */
 export const settings = mysqlTable("settings", {
@@ -158,10 +180,13 @@ export const settings = mysqlTable("settings", {
   cvFaceMinHeight: int("cvFaceMinHeight").default(40).notNull(),
   cvLandmarkMinPoints: int("cvLandmarkMinPoints").default(25).notNull(),
   cvBiometricMergeSim: decimal("cvBiometricMergeSim", { precision: 3, scale: 2 }).default("0.90").notNull(),
-  cvSpatialMergePx: int("cvSpatialMergePx").default(400).notNull(),
+  cvSpatialMergePx: int("cvSpatialMergePx").default(100).notNull(),
+  cvSpatialBiometricSim: decimal("cvSpatialBiometricSim", { precision: 3, scale: 2 }).default("0.30").notNull(),
   cvInactivityTimeoutSec: decimal("cvInactivityTimeoutSec", { precision: 4, scale: 1 }).default("5.0").notNull(),
   cvFrameQueueSize: int("cvFrameQueueSize").default(200).notNull(),
   cvDetectionWorkers: int("cvDetectionWorkers").default(2).notNull(),
+  cvMinFrameCount: int("cvMinFrameCount").default(5).notNull(),
+  cvCameraDedupWindowSec: decimal("cvCameraDedupWindowSec", { precision: 4, scale: 1 }).default("5.0").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });

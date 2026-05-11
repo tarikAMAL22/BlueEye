@@ -25,7 +25,7 @@ RUN pip install --no-cache-dir --default-timeout=1000 torch torchvision --index-
 RUN pip install --no-cache-dir --default-timeout=1000 ultralytics
 
 # Install RetinaFace
-RUN pip install --no-cache-dir --default-timeout=1000 retina-face
+RUN pip install --no-cache-dir --default-timeout=1000 retina-face tf-keras
 
 # Copy the entire modular package
 COPY cv_worker_v2/ ./cv_worker_v2/

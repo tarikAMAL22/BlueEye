@@ -16,6 +16,7 @@ import PersonRegistry from "./pages/PersonRegistry";
 import PersonDetails from "./pages/PersonDetails";
 import SystemSettings from "./pages/SystemSettings";
 import BlacklistManagement from "./pages/BlacklistManagement";
+import MotionDetections from "./pages/MotionDetections";
 import { useAuth } from "./_core/hooks/useAuth";
 
 function Router() {
@@ -51,6 +52,7 @@ function Router() {
       <Switch>
         <Route path={"/"} component={Dashboard} />
         <Route path={"/alerts"} component={LiveAlertsFeed} />
+        <Route path={"/movements"} component={MotionDetections} />
         <Route path={"/events"} component={EventLog} />
         
         {/* Admin-only routes */}

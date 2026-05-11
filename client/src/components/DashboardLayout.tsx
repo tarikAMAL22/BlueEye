@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/sidebar";
 import { getLoginUrl } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
-import { LayoutDashboard, LogOut, PanelLeft, Users, AlertCircle, FileText, Shield, Settings, Camera, Eye, AlertTriangle } from "lucide-react";
+import { LayoutDashboard, LogOut, PanelLeft, Users, AlertCircle, FileText, Shield, Settings, Camera, Eye, AlertTriangle, Film } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
@@ -30,8 +30,9 @@ import { Button } from "./ui/button";
 const getMenuItems = (isAdmin: boolean) => {
   const baseItems = [
     { icon: LayoutDashboard, label: "Dashboard", path: "/" },
-    { icon: Eye, label: "Live Alerts Feed", path: "/alerts" },
-    { icon: FileText, label: "Event Log", path: "/events" },
+    { icon: Eye,      label: "Live Alerts Feed",   path: "/alerts" },
+    { icon: Film,     label: "Motion Detections",  path: "/movements" },
+    { icon: FileText, label: "Event Log",           path: "/events" },
   ];
 
   const adminItems = isAdmin ? [

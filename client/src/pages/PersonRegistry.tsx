@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Plus, Edit, Trash2, User, Shield, Eye, Sparkles, Search, Fingerprint, Ghost, CheckCircle2, AlertTriangle } from "lucide-react";
+import { Plus, Edit, Trash2, User, Shield, Eye, Sparkles, Search, Fingerprint, Ghost, CheckCircle2, AlertTriangle, ChevronLeft, ChevronRight, UserCheck, SkipForward, Camera, Calendar } from "lucide-react";
 import { useForm, Controller } from "react-hook-form";
 import { toast } from "sonner";
 import { Label } from "@/components/ui/label";
@@ -114,11 +114,93 @@ export default function PersonRegistry() {
 
   const unknownPersons = useMemo(() => {
     if (!persons) return [];
-    return persons.filter(p => 
-      !p.isBlacklisted && 
+    return persons.filter(p =>
+      !p.isBlacklisted &&
       (p.role.toLowerCase() === "unknown" || p.name.toLowerCase().startsWith("unknown-"))
     ).filter(p => p.name.toLowerCase().includes(unknownSearch.toLowerCase()));
   }, [persons, unknownSearch]);
+
+  // ── Manage Unknown state ────────────────────────────────────────────────────
+  const [manageOpen, setManageOpen] = useState(false);
+  const [unknownIdx, setUnknownIdx] = useState(0);
+  const [resolvedName, setResolvedName] = useState("");
+  const [resolvedRole, setResolvedRole] = useState("staff");
+  const [resolvedBlacklist, setResolvedBlacklist] = useState(false);
+
+  const currentUnknown = unknownPersons[unknownIdx] ?? null;
+  const unknownTotal   = unknownPersons.length;
+
+  const { data: unknownAlerts } = trpc.alerts.getByPerson.useQuery(
+    { personId: currentUnknown?.id ?? 0 },
+    { enabled: manageOpen && !!currentUnknown }
+  );
+  const recentAlert = unknownAlerts?.[0] ?? null;
+
+  const openManage = (startIdx = 0) => {
+    setUnknownIdx(startIdx);
+    setResolvedName("");
+    setResolvedRole("staff");
+    setResolvedBlacklist(false);
+    setManageOpen(true);
+  };
+
+  const goNext = () => {
+    const next = unknownIdx + 1;
+    if (next < unknownTotal) {
+      setUnknownIdx(next);
+      setResolvedName("");
+      setResolvedRole("staff");
+      setResolvedBlacklist(false);
+    } else {
+      setManageOpen(false);
+      toast.success("All unknown detections reviewed.");
+    }
+  };
+
+  const goPrev = () => {
+    if (unknownIdx > 0) {
+      setUnknownIdx(unknownIdx - 1);
+      setResolvedName("");
+      setResolvedRole("staff");
+      setResolvedBlacklist(false);
+    }
+  };
+
+  const handleIdentify = async () => {
+    if (!currentUnknown || !resolvedName.trim()) return;
+    try {
+      await updateMutation.mutateAsync({
+        id: currentUnknown.id,
+        name: resolvedName.trim(),
+        role: resolvedRole || "staff",
+        isBlacklisted: resolvedBlacklist,
+      });
+      toast.success(`${resolvedName} identified and saved.`);
+      refetch();
+      goNext();
+    } catch (e: any) {
+      toast.error(e.message);
+    }
+  };
+
+  const handleSkip = () => goNext();
+
+  const handleDeleteUnknown = async () => {
+    if (!currentUnknown) return;
+    try {
+      await deleteMutation.mutateAsync({ id: currentUnknown.id });
+      toast.success("Unknown detection deleted.");
+      await refetch();
+      // Stay at same index (list shrinks) or close if exhausted
+      setUnknownIdx(i => Math.min(i, unknownTotal - 2));
+      if (unknownTotal <= 1) setManageOpen(false);
+      setResolvedName("");
+      setResolvedRole("staff");
+      setResolvedBlacklist(false);
+    } catch (e: any) {
+      toast.error(e.message);
+    }
+  };
 
   return (
     <div className="space-y-6 p-8">
@@ -455,6 +537,17 @@ export default function PersonRegistry() {
         </TabsContent>
 
         <TabsContent value="unknown" className="mt-0">
+          {unknownPersons.length > 0 && (
+            <div className="flex justify-end mb-3">
+              <Button
+                onClick={() => openManage(0)}
+                className="gap-2 bg-purple-600 hover:bg-purple-700 text-white"
+              >
+                <Ghost className="w-4 h-4" />
+                Manage Unknown ({unknownPersons.length})
+              </Button>
+            </div>
+          )}
           <Card className="glow-card bg-card/50 backdrop-blur border-border/50 overflow-hidden border-purple-500/20">
             <CardContent className="p-0">
               <div className="overflow-x-auto">
@@ -514,8 +607,17 @@ export default function PersonRegistry() {
                               <Button
                                 size="icon"
                                 variant="ghost"
-                                onClick={() => setLocation(`/persons/${person.id}`)}
+                                onClick={() => openManage(unknownPersons.findIndex((p: any) => p.id === person.id))}
                                 className="h-8 w-8 text-purple-400 hover:text-purple-300 hover:bg-purple-400/10"
+                                title="Review this unknown"
+                              >
+                                <UserCheck className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                onClick={() => setLocation(`/persons/${person.id}`)}
+                                className="h-8 w-8 text-blue-400 hover:text-blue-300 hover:bg-blue-400/10"
                               >
                                 <Eye className="w-4 h-4" />
                               </Button>
@@ -545,6 +647,151 @@ export default function PersonRegistry() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      {/* ── Manage Unknown Dialog ─────────────────────────────────────────── */}
+      <Dialog open={manageOpen} onOpenChange={setManageOpen}>
+        <DialogContent className="bg-card border-border max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-3">
+              <Ghost className="w-5 h-5 text-purple-400" />
+              Review Unknown Detections
+              {unknownTotal > 0 && (
+                <Badge variant="outline" className="bg-purple-500/10 text-purple-300 border-purple-500/30 text-xs">
+                  {unknownIdx + 1} / {unknownTotal}
+                </Badge>
+              )}
+            </DialogTitle>
+            <DialogDescription>
+              Identify this person or skip to the next unknown detection
+            </DialogDescription>
+          </DialogHeader>
+
+          {!currentUnknown ? (
+            <div className="py-10 text-center text-muted-foreground italic">
+              No unknown detections to review.
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-6 mt-2">
+              {/* Left — photos */}
+              <div className="space-y-3">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Detection Photo</p>
+                <div className="w-full aspect-square rounded-xl bg-purple-500/10 border border-purple-500/20 overflow-hidden flex items-center justify-center">
+                  {currentUnknown.photoUrl ? (
+                    <img src={currentUnknown.photoUrl} alt="Unknown" className="w-full h-full object-cover" />
+                  ) : (
+                    <Ghost className="w-16 h-16 text-purple-400/40" />
+                  )}
+                </div>
+                {recentAlert?.bestFrameSnapshotUrl && (
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+                      <Camera className="w-3 h-3" /> Best Alert Frame
+                    </p>
+                    <div className="w-full aspect-video rounded-lg overflow-hidden border border-orange-500/20">
+                      <img src={recentAlert.bestFrameSnapshotUrl} alt="Alert frame" className="w-full h-full object-cover" />
+                    </div>
+                    <p className="text-[10px] text-muted-foreground flex items-center gap-1">
+                      <Calendar className="w-3 h-3" />
+                      {new Date(recentAlert.createdAt).toLocaleString()}
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Right — decision inputs */}
+              <div className="flex flex-col gap-4">
+                <div>
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Temp ID</p>
+                  <p className="font-mono text-sm text-purple-300">{currentUnknown.name}</p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-sm font-medium">Full Name</Label>
+                  <Input
+                    placeholder="Enter person's name..."
+                    value={resolvedName}
+                    onChange={e => setResolvedName(e.target.value)}
+                    className="bg-input border-border"
+                    onKeyDown={e => { if (e.key === "Enter" && resolvedName.trim()) handleIdentify(); }}
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-sm font-medium">Role</Label>
+                  <div className="flex flex-wrap gap-2">
+                    {["staff", "contractor", "admin", "visitor"].map(r => (
+                      <button
+                        key={r}
+                        type="button"
+                        onClick={() => setResolvedRole(r)}
+                        className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
+                          resolvedRole === r
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : "bg-muted/30 text-muted-foreground border-border/50 hover:border-primary/50"
+                        }`}
+                      >
+                        {r}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between p-3 rounded-lg border border-red-500/20 bg-red-500/5">
+                  <div className="space-y-0.5">
+                    <Label className="text-sm font-semibold text-red-400">Add to Blacklist</Label>
+                    <p className="text-[10px] text-muted-foreground">Flag as high-priority watchlist target</p>
+                  </div>
+                  <Switch
+                    checked={resolvedBlacklist}
+                    onCheckedChange={setResolvedBlacklist}
+                  />
+                </div>
+
+                <div className="flex-1" />
+
+                {/* Action buttons */}
+                <div className="space-y-2 pt-2">
+                  <Button
+                    className="w-full gap-2 bg-purple-600 hover:bg-purple-700 text-white"
+                    disabled={!resolvedName.trim()}
+                    onClick={handleIdentify}
+                  >
+                    <UserCheck className="w-4 h-4" />
+                    Identify &amp; Save
+                  </Button>
+                  <div className="grid grid-cols-3 gap-2">
+                    <Button
+                      variant="outline"
+                      className="gap-1.5 border-border/50"
+                      disabled={unknownIdx === 0}
+                      onClick={goPrev}
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                      Prev
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="gap-1.5 border-border/50"
+                      onClick={handleSkip}
+                    >
+                      <SkipForward className="w-4 h-4" />
+                      Skip
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="gap-1.5 border-red-500/30 text-red-400 hover:bg-red-500/10 hover:border-red-500/50"
+                      onClick={handleDeleteUnknown}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      Delete
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

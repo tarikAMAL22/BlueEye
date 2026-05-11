@@ -185,6 +185,8 @@ export default defineConfig({
     },
     watch: {
       ignored: ["**/.manus-logs/**"],
+      usePolling: true,
+      interval: 500,
     },
   },
 });

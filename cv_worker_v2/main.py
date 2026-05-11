@@ -92,6 +92,9 @@ def main() -> None:
     signal.signal(signal.SIGINT,  _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
 
+    # Ensure DB schema is up to date
+    db.ensure_movements_table()
+
     # Initialise face engine (loads identities, starts reload thread)
     face_engine.start()
 
@@ -103,10 +106,11 @@ def main() -> None:
     from .processor import detection_pool, persistence_worker
     detection_pool.start()
     persistence_worker.start()
+    from .processor import _frame_queue
     logger.info(
         "Detection pipeline started — detection_workers=%d, frame_queue_size=%d",
         detection_pool._n,
-        detection_pool._n,
+        _frame_queue.maxsize,
     )
 
     # Start Deep Analysis worker

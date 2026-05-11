@@ -7,6 +7,7 @@ import * as db from "./db";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import http from "node:http";
 
 export const appRouter = router({
   system: systemRouter,
@@ -280,6 +281,25 @@ export const appRouter = router({
         return db.createAlert(input as any);
       }),
 
+    countFaces: protectedProcedure
+      .input(z.object({ imageUrl: z.string() }))
+      .mutation(async ({ input }) => {
+        try {
+          const response = await fetch("http://cv-worker:5000/api/count-faces", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ imageUrl: input.imageUrl }),
+          });
+          if (!response.ok) {
+            const err = await response.json();
+            throw new Error(err.error || "Failed to count faces");
+          }
+          return await response.json() as { faceCount: number; locations: { x: number; y: number; w: number; h: number }[] };
+        } catch (error: any) {
+          throw new Error(`CV Worker communication error: ${error.message}`);
+        }
+      }),
+
     notHim: protectedProcedure
       .input(z.object({ alertId: z.number() }))
       .mutation(async ({ input }) => {
@@ -415,39 +435,59 @@ export const appRouter = router({
     
     update: adminProcedure
       .input(z.object({
+        // Platform
         platformName: z.string().optional(),
-        alertThreshold: z.number().optional(),
-        notificationPreferences: z.any().optional(),
         retentionDays: z.number().optional(),
         clearOnStart: z.boolean().optional(),
         testMode: z.boolean().optional(),
-        biometricThreshold: z.number().optional(),
-        cvSceneBufferSec: z.number().optional(),
+        notificationPreferences: z.any().optional(),
+        // Detection pipeline
         cvDetectionInterval: z.number().optional(),
         cvDownscaleFactor: z.number().optional(),
-        cvRecognitionTolerance: z.number().optional(),
-        cvAlertCooldownSec: z.number().optional(),
-        cvDeepAnalysisEnabled: z.boolean().optional(),
         cvFaceMinHeight: z.number().optional(),
+        cvLandmarkMinPoints: z.number().optional(),
+        cvFrameQueueSize: z.number().optional(),
+        cvDetectionWorkers: z.number().optional(),
+        cvDeepAnalysisEnabled: z.boolean().optional(),
+        // Tracking & recognition
+        cvSceneBufferSec: z.number().optional(),
+        cvRecognitionTolerance: z.number().optional(),
+        cvBiometricMergeSim: z.number().optional(),
+        cvSpatialMergePx: z.number().optional(),
+        cvSpatialBiometricSim: z.number().optional(),
+        cvInactivityTimeoutSec: z.number().optional(),
+        cvMinFrameCount: z.number().optional(),
+        // Alert dedup
+        cvAlertCooldownSec: z.number().optional(),
+        cvCameraDedupWindowSec: z.number().optional(),
       }))
       .mutation(async ({ input }) => {
         const data: any = {};
+        // Platform
         if (input.platformName !== undefined) data.platformName = input.platformName;
-        if (input.alertThreshold !== undefined) data.alertThreshold = String(input.alertThreshold);
-        if (input.notificationPreferences !== undefined) data.notificationPreferences = input.notificationPreferences;
         if (input.retentionDays !== undefined) data.retentionDays = input.retentionDays;
         if (input.clearOnStart !== undefined) data.clearOnStart = input.clearOnStart;
         if (input.testMode !== undefined) data.testMode = input.testMode;
-        if (input.biometricThreshold !== undefined) data.biometricThreshold = String(input.biometricThreshold);
-        
-        // AI fields
-        if (input.cvSceneBufferSec !== undefined) data.cvSceneBufferSec = String(input.cvSceneBufferSec);
+        if (input.notificationPreferences !== undefined) data.notificationPreferences = input.notificationPreferences;
+        // Detection pipeline
         if (input.cvDetectionInterval !== undefined) data.cvDetectionInterval = input.cvDetectionInterval;
         if (input.cvDownscaleFactor !== undefined) data.cvDownscaleFactor = String(input.cvDownscaleFactor);
-        if (input.cvRecognitionTolerance !== undefined) data.cvRecognitionTolerance = String(input.cvRecognitionTolerance);
-        if (input.cvAlertCooldownSec !== undefined) data.cvAlertCooldownSec = input.cvAlertCooldownSec;
-        if (input.cvDeepAnalysisEnabled !== undefined) data.cvDeepAnalysisEnabled = input.cvDeepAnalysisEnabled;
         if (input.cvFaceMinHeight !== undefined) data.cvFaceMinHeight = input.cvFaceMinHeight;
+        if (input.cvLandmarkMinPoints !== undefined) data.cvLandmarkMinPoints = input.cvLandmarkMinPoints;
+        if (input.cvFrameQueueSize !== undefined) data.cvFrameQueueSize = input.cvFrameQueueSize;
+        if (input.cvDetectionWorkers !== undefined) data.cvDetectionWorkers = input.cvDetectionWorkers;
+        if (input.cvDeepAnalysisEnabled !== undefined) data.cvDeepAnalysisEnabled = input.cvDeepAnalysisEnabled;
+        // Tracking & recognition
+        if (input.cvSceneBufferSec !== undefined) data.cvSceneBufferSec = String(input.cvSceneBufferSec);
+        if (input.cvRecognitionTolerance !== undefined) data.cvRecognitionTolerance = String(input.cvRecognitionTolerance);
+        if (input.cvBiometricMergeSim !== undefined) data.cvBiometricMergeSim = String(input.cvBiometricMergeSim);
+        if (input.cvSpatialMergePx !== undefined) data.cvSpatialMergePx = input.cvSpatialMergePx;
+        if (input.cvSpatialBiometricSim !== undefined) data.cvSpatialBiometricSim = String(input.cvSpatialBiometricSim);
+        if (input.cvInactivityTimeoutSec !== undefined) data.cvInactivityTimeoutSec = String(input.cvInactivityTimeoutSec);
+        if (input.cvMinFrameCount !== undefined) data.cvMinFrameCount = input.cvMinFrameCount;
+        // Alert dedup
+        if (input.cvAlertCooldownSec !== undefined) data.cvAlertCooldownSec = input.cvAlertCooldownSec;
+        if (input.cvCameraDedupWindowSec !== undefined) data.cvCameraDedupWindowSec = String(input.cvCameraDedupWindowSec);
 
         return db.updateSettings(data);
       }),
@@ -459,6 +499,63 @@ export const appRouter = router({
     fullReset: adminProcedure.mutation(async () => {
       return db.fullSystemReset();
     }),
+
+    // ── Developer: video stream management ───────────────────────────────────
+    listVideos: adminProcedure.query(() => {
+      try {
+        return fs.readdirSync("/videos")
+          .filter((f) => /\.(mp4|mkv|avi|mov|ts)$/i.test(f))
+          .sort();
+      } catch {
+        return [] as string[];
+      }
+    }),
+
+    currentStreamVideo: adminProcedure.query(() => {
+      try {
+        const compose = fs.readFileSync("/app/docker-compose.yml", "utf8");
+        const m = compose.match(/-i \/videos\/([^\s]+)/);
+        return m ? m[1] : null;
+      } catch {
+        return null;
+      }
+    }),
+
+    applyStreamVideo: adminProcedure
+      .input(z.object({ filename: z.string().min(1) }))
+      .mutation(async ({ input }) => {
+        const { filename } = input;
+        const streamName = filename.replace(/\.[^.]+$/, "");
+        const composePath = "/app/docker-compose.yml";
+
+        // Update the streamer command in docker-compose.yml
+        let content = fs.readFileSync(composePath, "utf8");
+        content = content.replace(
+          /-i \/videos\/[^\s]+ -c copy -f rtsp rtsp:\/\/mediamtx:8554\/\S+/,
+          `-i /videos/${filename} -c copy -f rtsp rtsp://mediamtx:8554/${streamName}`,
+        );
+        fs.writeFileSync(composePath, content, "utf8");
+
+        // Restart the streamer container via Docker Engine API (unix socket)
+        await new Promise<void>((resolve, reject) => {
+          const req = http.request(
+            {
+              socketPath: "/var/run/docker.sock",
+              path: "/containers/blueeye-streamer-1/restart",
+              method: "POST",
+            },
+            (res) => {
+              res.resume(); // drain response body
+              if (res.statusCode === 204) resolve();
+              else reject(new Error(`Docker API returned ${res.statusCode}`));
+            },
+          );
+          req.on("error", reject);
+          req.end();
+        });
+
+        return { success: true, streamUrl: `rtsp://mediamtx:8554/${streamName}` };
+      }),
   }),
 
   // ============ ACCESS RULES ============
@@ -508,6 +605,27 @@ export const appRouter = router({
       }))
       .mutation(async ({ input }) => {
         return db.updateUser(input.id, { role: input.role });
+      }),
+  }),
+
+  movements: router({
+    list: protectedProcedure
+      .input(z.object({
+        limit:     z.number().default(100),
+        cameraId:  z.number().optional(),
+        zoneId:    z.number().optional(),
+        alertId:   z.number().optional(),
+        startDate: z.string().optional(),
+        endDate:   z.string().optional(),
+      }))
+      .query(async ({ input }) => {
+        return db.getMovements(input);
+      }),
+
+    getByAlertId: protectedProcedure
+      .input(z.object({ alertId: z.number() }))
+      .query(async ({ input }) => {
+        return db.getMovementByAlertId(input.alertId);
       }),
   }),
 });

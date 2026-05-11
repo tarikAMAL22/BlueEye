@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AlertCircle, CheckCircle, AlertTriangle, Eye, RefreshCw, UserPlus, Link as LinkIcon, User, History, Video, Filter, X, Scan, Sparkles } from "lucide-react";
+import { AlertCircle, CheckCircle, AlertTriangle, Eye, RefreshCw, UserPlus, Link as LinkIcon, User, History, Video, Filter, X, Scan, Sparkles, Users, Clapperboard } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
@@ -109,6 +109,11 @@ export default function LiveAlertsFeed() {
   const assignPersonMutation = trpc.alerts.assignPerson.useMutation();
   const unassignPersonMutation = trpc.alerts.unassignPerson.useMutation();
   const createPersonMutation = trpc.persons.create.useMutation();
+
+  const { data: relatedMovement } = trpc.movements.getByAlertId.useQuery(
+    { alertId: selectedAlert?.id ?? 0 },
+    { enabled: !!selectedAlert }
+  );
 
   const AlertLogs = ({ logs }: { logs: any[] }) => {
     if (!logs || logs.length === 0) return <div className="text-xs text-muted-foreground italic p-4 text-center border border-dashed border-border/50 rounded-lg">No activity logs recorded.</div>;
@@ -588,8 +593,10 @@ export default function LiveAlertsFeed() {
                 <div
                   key={alert.id}
                   className={`flex items-center gap-4 p-4 rounded border transition-colors cursor-pointer ${
-                    alert.person?.isBlacklisted 
-                      ? "bg-red-500/10 border-red-500/50 hover:bg-red-500/20 shadow-[0_0_15px_rgba(239,68,68,0.1)]" 
+                    alert.person?.isBlacklisted
+                      ? "bg-red-500/10 border-red-500/50 hover:bg-red-500/20 shadow-[0_0_15px_rgba(239,68,68,0.1)]"
+                      : (alert.metadata as any)?.multiPersonFrame
+                      ? "bg-red-900/20 border-red-700/60 hover:bg-red-900/30 shadow-[0_0_12px_rgba(220,38,38,0.08)]"
                       : "bg-card/50 border-border/50 hover:border-primary/50 hover:bg-card/80"
                   }`}
                   onClick={() => handleViewDetails(alert)}
@@ -618,6 +625,11 @@ export default function LiveAlertsFeed() {
                       <Badge className={`${threatLevelColor(alert.threatLevel)} text-xs`}>
                         {alert.threatLevel}
                       </Badge>
+                      {(alert.metadata as any)?.multiPersonFrame && (
+                        <Badge className="bg-red-600 text-white text-[10px] font-bold px-1.5 py-0 flex items-center gap-1">
+                          <Users className="w-3 h-3" /> Multiple Persons
+                        </Badge>
+                      )}
                       {alert.status === "active" && (
                         <div className="status-pulse w-2 h-2 rounded-full bg-red-500 ml-auto" />
                       )}
@@ -675,6 +687,12 @@ export default function LiveAlertsFeed() {
                     <h3 className="text-sm font-medium mb-3 flex items-center gap-2">
                       <Video className="w-4 h-4 text-primary" /> Best Frame Capture
                     </h3>
+                    {(selectedAlert.metadata as any)?.multiPersonFrame && (
+                      <div className="flex items-center gap-2 mb-2 px-3 py-2 rounded-lg bg-red-600/20 border border-red-500/50 text-red-400 text-xs font-bold uppercase tracking-wide">
+                        <Users className="w-4 h-4 flex-shrink-0" />
+                        Multiple Persons Detected in Frame
+                      </div>
+                    )}
                     <div className="w-full aspect-video rounded-xl border border-border/50 bg-black flex items-center justify-center overflow-hidden shadow-2xl group relative">
                       {selectedAlert.bestFrameSnapshotUrl ? (
                         <img src={selectedAlert.bestFrameSnapshotUrl} alt="Best Frame" className="w-full h-full object-contain" />
@@ -688,6 +706,40 @@ export default function LiveAlertsFeed() {
                         Full Frame Resolution
                       </div>
                     </div>
+
+                    {/* Auto multi-person face crops */}
+                    {(() => {
+                      const meta = selectedAlert.metadata as any;
+                      const urls: string[] = meta?.detectedFaceUrls ?? [];
+                      const count: number  = meta?.faceCount ?? 0;
+                      if (!meta) return null;
+                      return (
+                        <div className="mt-2 space-y-2">
+                          <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-bold uppercase tracking-wide ${
+                            count > 1
+                              ? "bg-red-600/20 border border-red-600/50 text-red-400"
+                              : count === 1
+                              ? "bg-green-600/20 border border-green-500/50 text-green-400"
+                              : "bg-yellow-600/20 border border-yellow-500/50 text-yellow-400"
+                          }`}>
+                            <Users className="w-4 h-4 flex-shrink-0" />
+                            {count === 0 ? "No face detected in frame" : count === 1 ? "1 person in frame" : `${count} persons detected in frame`}
+                          </div>
+                          {urls.length > 0 && (
+                            <div>
+                              <p className="text-[10px] uppercase font-bold text-muted-foreground mb-1.5">Detected Faces</p>
+                              <div className="flex flex-wrap gap-2">
+                                {urls.map((url, i) => (
+                                  <div key={i} className="w-16 h-16 rounded border border-red-500/40 overflow-hidden bg-muted flex-shrink-0">
+                                    <img src={url} alt={`Face ${i + 1}`} className="w-full h-full object-cover" />
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   <div className="grid grid-cols-2 gap-4">
@@ -1000,6 +1052,14 @@ export default function LiveAlertsFeed() {
                 >
                   Dismiss
                 </Button>
+                {relatedMovement && (
+                  <WouterLink href={`/movements?alertId=${selectedAlert.id}`}>
+                    <Button variant="outline" className="gap-2 border-orange-500/50 text-orange-400 hover:bg-orange-500/10 hover:border-orange-500" onClick={() => setOpen(false)}>
+                      <Clapperboard className="w-4 h-4" />
+                      View Motion #{relatedMovement.id}
+                    </Button>
+                  </WouterLink>
+                )}
               </div>
             </div>
           )}

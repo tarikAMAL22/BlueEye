@@ -26,6 +26,8 @@ services:
     volumes:
       - .:/app
       - node_modules:/app/node_modules
+      - "C:/sources/Video Server Tests/videos:/videos:ro"
+      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - blueeye-network
     deploy:
@@ -80,6 +82,16 @@ services:
     restart: unless-stopped
     networks:
       - blueeye-network
+
+  streamer:
+    image: jrottenberg/ffmpeg
+    command: -re -stream_loop -1 -i /videos/test7.mp4 -c copy -f rtsp rtsp://mediamtx:8554/test7
+    volumes:
+      - "C:/sources/Video Server Tests/videos:/videos"
+    networks:
+      - blueeye-network
+    depends_on:
+      - mediamtx
 
 networks:
   blueeye-network:

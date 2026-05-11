@@ -1,6 +1,6 @@
 import { eq, desc, and, like, gte, lte, ne, isNotNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users, cameras, zones, persons, alerts, events, settings, accessRules, Camera, Zone, Person, Alert, Event, Setting, InsertCamera, InsertZone, InsertPerson, InsertAlert, InsertEvent, InsertSetting, InsertAccessRule } from "../drizzle/schema";
+import { InsertUser, users, cameras, zones, persons, alerts, events, settings, accessRules, movements, Camera, Zone, Person, Alert, Event, Setting, InsertCamera, InsertZone, InsertPerson, InsertAlert, InsertEvent, InsertSetting, InsertAccessRule, Movement } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -251,6 +251,8 @@ export async function getAlerts(filters: {
     // @ts-ignore
     query = query.where(and(...conditions));
   }
+
+
   
   const results = await query.orderBy(desc(alerts.timestamp)).limit(limit);
   
@@ -386,11 +388,12 @@ export async function clearAlertsAndEvents() {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   
-  // Clear alerts and events tables
+  // Clear alerts, events and movements tables
   await db.delete(alerts);
   await db.delete(events);
-  
-  console.log("[Database] Cleared alerts and events logs.");
+  await db.delete(movements);
+
+  console.log("[Database] Cleared alerts, events and movements logs.");
   return { success: true };
 }
 
@@ -404,6 +407,8 @@ export async function fullSystemReset() {
     await db.delete(alerts);
     console.log("[System Reset] Clearing events...");
     await db.delete(events);
+    console.log("[System Reset] Clearing movements...");
+    await db.delete(movements);
     console.log("[System Reset] Clearing persons...");
     await db.delete(persons);
     
@@ -503,6 +508,40 @@ export async function getPotentialMatches(personId: number, customThreshold?: nu
 
   // Sort by score descending
   return matches.sort((a, b) => b.matchScore - a.matchScore);
+}
+
+// ============ MOVEMENT QUERIES ============
+
+export async function getMovementByAlertId(alertId: number): Promise<Movement | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(movements).where(eq(movements.alertId, alertId)).limit(1);
+  return rows[0];
+}
+
+export async function getMovements(filters: {
+  limit?: number;
+  cameraId?: number;
+  zoneId?: number;
+  alertId?: number;
+  startDate?: string;
+  endDate?: string;
+} = {}) {
+  const db = await getDb();
+  if (!db) return [];
+
+  const limit = filters.limit ?? 100;
+  const conditions = [];
+  if (filters.cameraId) conditions.push(eq(movements.cameraId, filters.cameraId));
+  if (filters.zoneId)   conditions.push(eq(movements.zoneId,   filters.zoneId));
+  if (filters.alertId)  conditions.push(eq(movements.alertId,  filters.alertId));
+  if (filters.startDate) conditions.push(gte(movements.timestamp, new Date(filters.startDate)));
+  if (filters.endDate)   conditions.push(lte(movements.timestamp, new Date(filters.endDate)));
+
+  // @ts-ignore
+  let q = db.select().from(movements);
+  if (conditions.length > 0) q = (q as any).where(and(...conditions));
+  return (q as any).orderBy(desc(movements.timestamp)).limit(limit) as Promise<Movement[]>;
 }
 
 // ============ ACCESS RULES QUERIES ============

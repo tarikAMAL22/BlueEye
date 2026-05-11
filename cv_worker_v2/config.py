@@ -39,7 +39,10 @@ MIN_FRAME_COUNT       = 5           # Minimum detections required before persist
 
 # ─── Tracking ────────────────────────────────────────────────────────────────
 SPATIAL_MERGE_PX      = 100         # Max centroid distance to merge trackers (px)
-BIOMETRIC_MERGE_SIM   = 0.90        # Min similarity to merge by encoding
+BIOMETRIC_MERGE_SIM   = 0.90        # Min similarity to merge by encoding (biometric-only path)
+SPATIAL_BIOMETRIC_SIM = 0.30        # Looser similarity floor for spatial+biometric combined merge
+                                    # (same person frame-to-frame scores ~0.35–0.70, clearly
+                                    #  different people score <0.20 even when spatially close)
 
 # ─── Biometric memory (cooldown) ──────────────────────────────────────────────
 ALERT_COOLDOWN_SEC    = 60          # Seconds before the same encoding can re-alert
