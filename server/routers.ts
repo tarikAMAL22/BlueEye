@@ -547,9 +547,7 @@ export const appRouter = router({
 
     currentStreamVideo: adminProcedure.query(() => {
       try {
-        const compose = fs.readFileSync("/app/docker-compose.yml", "utf8");
-        const m = compose.match(/-i \/videos\/([^\s]+)/);
-        return m ? m[1] : null;
+        return fs.readFileSync("/streamer_config/current_video.txt", "utf8").trim() || null;
       } catch {
         return null;
       }
@@ -557,38 +555,11 @@ export const appRouter = router({
 
     applyStreamVideo: adminProcedure
       .input(z.object({ filename: z.string().min(1) }))
-      .mutation(async ({ input }) => {
+      .mutation(({ input }) => {
         const { filename } = input;
-        const streamName = filename.replace(/\.[^.]+$/, "");
-        const composePath = "/app/docker-compose.yml";
-
-        // Update the streamer command in docker-compose.yml
-        let content = fs.readFileSync(composePath, "utf8");
-        content = content.replace(
-          /-i \/videos\/[^\s]+ -c copy -f rtsp rtsp:\/\/mediamtx:8554\/\S+/,
-          `-i /videos/${filename} -c copy -f rtsp rtsp://mediamtx:8554/${streamName}`,
-        );
-        fs.writeFileSync(composePath, content, "utf8");
-
-        // Restart the streamer container via Docker Engine API (unix socket)
-        await new Promise<void>((resolve, reject) => {
-          const req = http.request(
-            {
-              socketPath: "/var/run/docker.sock",
-              path: "/containers/blueeye-streamer-1/restart",
-              method: "POST",
-            },
-            (res) => {
-              res.resume(); // drain response body
-              if (res.statusCode === 204) resolve();
-              else reject(new Error(`Docker API returned ${res.statusCode}`));
-            },
-          );
-          req.on("error", reject);
-          req.end();
-        });
-
-        return { success: true, streamUrl: `rtsp://mediamtx:8554/${streamName}` };
+        fs.mkdirSync("/streamer_config", { recursive: true });
+        fs.writeFileSync("/streamer_config/current_video.txt", filename, "utf8");
+        return { success: true, streamUrl: "rtsp://mediamtx:8554/dev" };
       }),
   }),
 
