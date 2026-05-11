@@ -9,7 +9,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Plus, Edit, Trash2, User, Shield, Eye, Sparkles, Search, Fingerprint, Ghost, CheckCircle2, AlertTriangle, ChevronLeft, ChevronRight, UserCheck, SkipForward, Camera, Calendar } from "lucide-react";
+import { Plus, Edit, Trash2, User, Shield, Eye, Sparkles, Search, Fingerprint, Ghost, CheckCircle2, AlertTriangle, ChevronLeft, ChevronRight, UserCheck, SkipForward, Camera, Calendar, Scan, RefreshCw, Link as LinkIcon } from "lucide-react";
+import { Slider } from "@/components/ui/slider";
 import { useForm, Controller } from "react-hook-form";
 import { toast } from "sonner";
 import { Label } from "@/components/ui/label";
@@ -36,6 +37,7 @@ export default function PersonRegistry() {
   const createMutation = trpc.persons.create.useMutation();
   const updateMutation = trpc.persons.update.useMutation();
   const deleteMutation = trpc.persons.delete.useMutation();
+  const mergeMutation  = trpc.persons.mergePersons.useMutation();
 
   const onSubmit = async (data: any) => {
     try {
@@ -130,17 +132,38 @@ export default function PersonRegistry() {
   const currentUnknown = unknownPersons[unknownIdx] ?? null;
   const unknownTotal   = unknownPersons.length;
 
+  const [matchSearchQuery, setMatchSearchQuery] = useState("");
+  const [matchThreshold, setMatchThreshold] = useState(50); // slider 0–100 → distance 1.0–0.0
+  const matchDistThreshold = 1.0 - matchThreshold / 100;
+
   const { data: unknownAlerts } = trpc.alerts.getByPerson.useQuery(
     { personId: currentUnknown?.id ?? 0 },
     { enabled: manageOpen && !!currentUnknown }
   );
   const recentAlert = unknownAlerts?.[0] ?? null;
 
-  const openManage = (startIdx = 0) => {
-    setUnknownIdx(startIdx);
+  const { data: potentialMatches, isLoading: isMatchesLoading, refetch: refetchMatches } =
+    trpc.persons.getPotentialMatches.useQuery(
+      { personId: currentUnknown?.id ?? 0, threshold: matchDistThreshold },
+      { enabled: manageOpen && !!currentUnknown }
+    );
+
+  const knownMatches = (potentialMatches ?? []).filter((m: any) =>
+    m.id !== currentUnknown?.id &&
+    m.role.toLowerCase() !== "unknown" &&
+    !m.name.toLowerCase().startsWith("unknown-")
+  );
+
+  const resetDecisionState = () => {
     setResolvedName("");
     setResolvedRole("staff");
     setResolvedBlacklist(false);
+    setMatchSearchQuery("");
+  };
+
+  const openManage = (startIdx = 0) => {
+    setUnknownIdx(startIdx);
+    resetDecisionState();
     setManageOpen(true);
   };
 
@@ -148,9 +171,7 @@ export default function PersonRegistry() {
     const next = unknownIdx + 1;
     if (next < unknownTotal) {
       setUnknownIdx(next);
-      setResolvedName("");
-      setResolvedRole("staff");
-      setResolvedBlacklist(false);
+      resetDecisionState();
     } else {
       setManageOpen(false);
       toast.success("All unknown detections reviewed.");
@@ -160,9 +181,7 @@ export default function PersonRegistry() {
   const goPrev = () => {
     if (unknownIdx > 0) {
       setUnknownIdx(unknownIdx - 1);
-      setResolvedName("");
-      setResolvedRole("staff");
-      setResolvedBlacklist(false);
+      resetDecisionState();
     }
   };
 
@@ -185,6 +204,18 @@ export default function PersonRegistry() {
 
   const handleSkip = () => goNext();
 
+  const handleAssignTo = async (targetId: number, targetName: string) => {
+    if (!currentUnknown) return;
+    try {
+      await mergeMutation.mutateAsync({ sourceId: currentUnknown.id, targetId });
+      toast.success(`Merged into ${targetName} — all history transferred.`);
+      await refetch();
+      goNext();
+    } catch (e: any) {
+      toast.error(e.message);
+    }
+  };
+
   const handleDeleteUnknown = async () => {
     if (!currentUnknown) return;
     try {
@@ -194,9 +225,7 @@ export default function PersonRegistry() {
       // Stay at same index (list shrinks) or close if exhausted
       setUnknownIdx(i => Math.min(i, unknownTotal - 2));
       if (unknownTotal <= 1) setManageOpen(false);
-      setResolvedName("");
-      setResolvedRole("staff");
-      setResolvedBlacklist(false);
+      resetDecisionState();
     } catch (e: any) {
       toast.error(e.message);
     }
@@ -650,7 +679,7 @@ export default function PersonRegistry() {
 
       {/* ── Manage Unknown Dialog ─────────────────────────────────────────── */}
       <Dialog open={manageOpen} onOpenChange={setManageOpen}>
-        <DialogContent className="bg-card border-border max-w-2xl">
+        <DialogContent className="bg-card border-border max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-3">
               <Ghost className="w-5 h-5 text-purple-400" />
@@ -787,6 +816,140 @@ export default function PersonRegistry() {
                     </Button>
                   </div>
                 </div>
+              </div>
+            </div>
+
+            {/* ── Potential Matches ──────────────────────────────────────── */}
+            <div className="border-t border-border/40 pt-5 space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Scan className="w-4 h-4 text-blue-400" />
+                  <span className="text-sm font-semibold uppercase tracking-wider text-blue-400">Assign to Known Person</span>
+                  {!isMatchesLoading && (
+                    <Badge variant="outline" className="border-blue-500/40 text-blue-400 text-[10px]">
+                      {knownMatches.length} AI match{knownMatches.length !== 1 ? "es" : ""}
+                    </Badge>
+                  )}
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] uppercase text-muted-foreground font-bold">Threshold</span>
+                    <span className="text-[10px] font-mono text-blue-400 font-bold w-8 text-right">{matchThreshold}%</span>
+                    <Slider
+                      value={[matchThreshold]}
+                      onValueChange={vals => setMatchThreshold(vals[0])}
+                      max={100}
+                      step={5}
+                      className="w-24"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => refetchMatches()}
+                    className={`text-muted-foreground hover:text-blue-400 transition-colors ${isMatchesLoading ? "animate-spin" : ""}`}
+                    title="Re-scan"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* AI auto-matches */}
+              {isMatchesLoading ? (
+                <div className="grid grid-cols-2 gap-3">
+                  {[1, 2].map(i => (
+                    <div key={i} className="h-16 rounded-xl bg-muted/30 animate-pulse" />
+                  ))}
+                </div>
+              ) : knownMatches.length > 0 ? (
+                <div className="grid grid-cols-2 gap-3">
+                  {knownMatches.map((match: any) => (
+                    <div key={match.id} className="flex items-center gap-3 p-3 rounded-xl border border-blue-500/20 bg-blue-500/5 hover:bg-blue-500/10 transition-colors group">
+                      <div className="w-12 h-12 rounded-lg overflow-hidden border border-blue-500/30 flex-shrink-0 bg-muted">
+                        {match.photoUrl
+                          ? <img src={match.photoUrl} alt={match.name} className="w-full h-full object-cover" />
+                          : <User className="w-6 h-6 m-3 text-muted-foreground" />
+                        }
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-bold text-blue-300 truncate">{match.name}</p>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          <Badge variant="outline" className="text-[9px] px-1.5 py-0 border-blue-500/30 text-blue-400">{match.role}</Badge>
+                          <span className="text-[10px] font-mono text-blue-500">{match.matchScore}%</span>
+                        </div>
+                      </div>
+                      <Button
+                        size="sm"
+                        className="bg-blue-600 hover:bg-blue-700 h-8 px-3 text-xs gap-1 flex-shrink-0"
+                        onClick={() => handleAssignTo(match.id, match.name)}
+                        disabled={mergeMutation.isPending}
+                      >
+                        <UserCheck className="w-3.5 h-3.5" />
+                        Is Him
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground italic text-center py-2 border border-dashed border-border/40 rounded-lg">
+                  No automatic matches found — use manual search below
+                </p>
+              )}
+
+              {/* Manual search */}
+              <div className="space-y-2">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/50" />
+                  <Input
+                    placeholder="Search known persons by name or ID..."
+                    className="pl-10 bg-background/50 border-border/50 text-sm"
+                    value={matchSearchQuery}
+                    onChange={e => setMatchSearchQuery(e.target.value)}
+                  />
+                </div>
+                {matchSearchQuery && (
+                  <div className="max-h-44 overflow-y-auto space-y-1.5 pr-1">
+                    {knownPersons
+                      .filter((p: any) =>
+                        p.name.toLowerCase().includes(matchSearchQuery.toLowerCase()) ||
+                        String(p.id).includes(matchSearchQuery)
+                      )
+                      .slice(0, 8)
+                      .map((candidate: any) => (
+                        <div key={candidate.id} className="flex items-center justify-between p-2.5 rounded-lg bg-background/30 border border-border/40 hover:border-blue-500/40 transition-all group">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-9 h-9 rounded overflow-hidden border border-border/50 bg-muted flex-shrink-0">
+                              {candidate.photoUrl
+                                ? <img src={candidate.photoUrl} className="w-full h-full object-cover" />
+                                : <User className="w-4 h-4 m-2.5 text-muted-foreground" />
+                              }
+                            </div>
+                            <div>
+                              <p className="text-sm font-bold leading-tight">{candidate.name}</p>
+                              <p className="text-[10px] text-muted-foreground">{candidate.role} · #{candidate.id}</p>
+                            </div>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="text-blue-400 hover:text-blue-300 hover:bg-blue-400/10 opacity-0 group-hover:opacity-100 transition-opacity gap-1.5 h-7 px-2 text-xs"
+                            onClick={() => handleAssignTo(candidate.id, candidate.name)}
+                            disabled={mergeMutation.isPending}
+                          >
+                            <LinkIcon className="w-3.5 h-3.5" />
+                            Assign
+                          </Button>
+                        </div>
+                      ))
+                    }
+                    {knownPersons.filter((p: any) =>
+                      p.name.toLowerCase().includes(matchSearchQuery.toLowerCase()) ||
+                      String(p.id).includes(matchSearchQuery)
+                    ).length === 0 && (
+                      <p className="text-center py-3 text-xs text-muted-foreground">No known persons match "{matchSearchQuery}"</p>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           )}
