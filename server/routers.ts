@@ -219,10 +219,13 @@ export const appRouter = router({
           }
         }
 
-        const updated = await db.updatePerson(id, {
-          ...data,
-          photoUrl: finalPhotoUrl
-        });
+        // Strip undefined values so Drizzle doesn't overwrite existing DB
+        // columns with NULL — critical for photoUrl when no new photo is sent
+        const updatePayload: Record<string, unknown> = Object.fromEntries(
+          Object.entries({ ...data, photoUrl: finalPhotoUrl })
+            .filter(([, v]) => v !== undefined)
+        );
+        const updated = await db.updatePerson(id, updatePayload as any);
         if (finalPhotoUrl) {
           fetch("http://cv-worker:5000/api/encode-person", {
             method: "POST",

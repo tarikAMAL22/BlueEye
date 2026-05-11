@@ -85,7 +85,7 @@ services:
 
   streamer:
     image: jrottenberg/ffmpeg
-    command: -re -stream_loop -1 -i /videos/test7.mp4 -c copy -f rtsp rtsp://mediamtx:8554/test7
+    command: -re -stream_loop -1 -i /videos/test5.mp4 -c copy -f rtsp rtsp://mediamtx:8554/test5
     volumes:
       - "C:/sources/Video Server Tests/videos:/videos"
     networks:

@@ -498,91 +498,58 @@ export default function PersonRegistry() {
         </TabsContent>
 
         <TabsContent value="blacklist" className="mt-0">
-          <Card className="glow-card bg-card/50 backdrop-blur border-red-500/20 overflow-hidden shadow-[0_0_20px_rgba(239,68,68,0.05)]">
-            <CardContent className="p-0">
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader className="bg-red-500/5">
-                    <TableRow className="border-border/50 hover:bg-transparent">
-                      <TableHead className="w-[80px]">Photo</TableHead>
-                      <TableHead>Suspect Name</TableHead>
-                      <TableHead>Classification</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead className="text-right pr-6">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {blacklistedPersons.length > 0 ? (
-                      blacklistedPersons.map((person: any) => (
-                        <TableRow key={person.id} className="border-border/50 bg-red-500/[0.02] hover:bg-red-500/5 group transition-colors">
-                          <TableCell className="pl-6">
-                            <div className="w-12 h-12 rounded-lg bg-muted flex items-center justify-center border border-red-500/20 ring-2 ring-red-500/10 overflow-hidden shadow-inner">
-                              {person.photoUrl ? (
-                                <img src={person.photoUrl} alt={person.name} className="w-full h-full object-cover" />
-                              ) : (
-                                <AlertTriangle className="w-6 h-6 text-red-500/40" />
-                              )}
-                            </div>
-                          </TableCell>
-                          <TableCell className="font-bold text-red-500 tracking-tight">
-                            <div className="flex flex-col">
-                              <span>{person.name}</span>
-                              <span className="text-[10px] text-muted-foreground uppercase tracking-widest mt-0.5">Target ID: #{person.id}</span>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant="outline" className="border-red-500/30 text-red-400 bg-red-500/5 uppercase text-[10px]">
-                              Blacklisted
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex items-center gap-2">
-                              <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-                              <span className="text-[10px] font-bold text-red-400 uppercase tracking-wider">Active Monitor</span>
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-right pr-6">
-                            <div className="flex gap-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                onClick={() => setLocation(`/persons/${person.id}`)}
-                                className="h-8 w-8 text-blue-400 hover:text-blue-300 hover:bg-blue-400/10"
-                              >
-                                <Eye className="w-4 h-4" />
-                              </Button>
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                onClick={() => handleEdit(person)}
-                                className="h-8 w-8 text-primary hover:text-primary hover:bg-primary/10"
-                              >
-                                <Edit className="w-4 h-4" />
-                              </Button>
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                onClick={() => handleDelete(person.id)}
-                                className="h-8 w-8 text-red-500 hover:text-red-600 hover:bg-red-500/10"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </Button>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ))
+          {isLoading ? (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+              {[1,2,3,4,5].map(i => (
+                <Skeleton key={i} className="aspect-[3/4] rounded-xl" />
+              ))}
+            </div>
+          ) : blacklistedPersons.length > 0 ? (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+              {blacklistedPersons.map((person: any) => (
+                <div
+                  key={person.id}
+                  onClick={() => setLocation(`/persons/${person.id}`)}
+                  className="group relative cursor-pointer rounded-xl overflow-hidden border border-red-500/20 bg-card/50 hover:border-red-500/60 hover:shadow-[0_0_20px_rgba(239,68,68,0.15)] transition-all duration-200"
+                >
+                  {/* Photo */}
+                  <div className="aspect-[3/4] bg-red-500/5 flex items-center justify-center overflow-hidden">
+                    {person.photoUrl ? (
+                      <img
+                        src={person.photoUrl}
+                        alt={person.name}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                      />
                     ) : (
-                      <TableRow>
-                        <TableCell colSpan={5} className="h-32 text-center text-muted-foreground italic">
-                          No blacklisted persons found.
-                        </TableCell>
-                      </TableRow>
+                      <AlertTriangle className="w-12 h-12 text-red-500/30" />
                     )}
-                  </TableBody>
-                </Table>
-              </div>
-            </CardContent>
-          </Card>
+                    {/* Overlay on hover */}
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-70 group-hover:opacity-90 transition-opacity" />
+                  </div>
+
+                  {/* Live monitor dot */}
+                  <div className="absolute top-2 right-2 flex items-center gap-1.5 bg-black/60 backdrop-blur-sm px-2 py-1 rounded-full">
+                    <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                    <span className="text-[9px] font-bold text-red-400 uppercase tracking-wider">Live</span>
+                  </div>
+
+                  {/* Name + ID */}
+                  <div className="absolute bottom-0 left-0 right-0 p-3">
+                    <Badge variant="outline" className="border-red-500/40 text-red-400 bg-red-500/10 text-[9px] uppercase tracking-wider mb-1.5">
+                      Blacklisted
+                    </Badge>
+                    <p className="text-sm font-bold text-white leading-tight truncate">{person.name}</p>
+                    <p className="text-[10px] text-red-300/70 mt-0.5">#{person.id} · {person.role}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center h-48 text-muted-foreground gap-3 border border-dashed border-red-500/20 rounded-xl bg-red-500/[0.02]">
+              <AlertTriangle className="w-8 h-8 text-red-500/30" />
+              <p className="text-sm italic">No blacklisted persons found.</p>
+            </div>
+          )}
         </TabsContent>
 
         <TabsContent value="unknown" className="mt-0">
