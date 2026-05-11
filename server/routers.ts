@@ -627,6 +627,12 @@ export const appRouter = router({
         return db.getMovements(input);
       }),
 
+    getById: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .query(async ({ input }) => {
+        return db.getMovementById(input.id);
+      }),
+
     getByAlertId: protectedProcedure
       .input(z.object({ alertId: z.number() }))
       .query(async ({ input }) => {

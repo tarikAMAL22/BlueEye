@@ -512,6 +512,13 @@ export async function getPotentialMatches(personId: number, customThreshold?: nu
 
 // ============ MOVEMENT QUERIES ============
 
+export async function getMovementById(id: number): Promise<Movement | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(movements).where(eq(movements.id, id)).limit(1);
+  return rows[0];
+}
+
 export async function getMovementByAlertId(alertId: number): Promise<Movement | undefined> {
   const db = await getDb();
   if (!db) return undefined;
