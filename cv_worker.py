@@ -35,6 +35,24 @@ def get_db_connection():
         except:
             time.sleep(5)
 
+def is_valid_face_crop(face_image) -> bool:
+    """Return True only if face_image is a usable identity photo."""
+    if face_image is None or face_image.size == 0:
+        return False
+    h, w = face_image.shape[:2]
+    if h < 80 or w < 80:
+        return False
+    gray = cv2.cvtColor(face_image, cv2.COLOR_BGR2GRAY)
+    if cv2.Laplacian(gray, cv2.CV_64F).var() < 50:   # too blurry
+        return False
+    if np.std(face_image) < 20:                        # nearly solid colour (shirt/wall)
+        return False
+    ratio = h / w
+    if ratio < 0.8 or ratio > 2.5:                    # non-face aspect ratio
+        return False
+    return True
+
+
 def process_final_alert(cam, alert_data, cursor, conn):
     cam_id      = cam.get('id')
     zone_id     = cam.get('zoneId', 1)
@@ -81,6 +99,11 @@ def process_final_alert(cam, alert_data, cursor, conn):
 
     # Normal face-visible path
     if not person_id:
+        if not is_valid_face_crop(face_image):
+            logger.warning(
+                f"Invalid face crop on {cam.get('name')} — skipping unknown-person insert"
+            )
+            return
         try:
             unknown_name  = f"unknown-{unique_id[:8]}"
             encoding_json = json.dumps(face_encoding.tolist())
@@ -337,12 +360,28 @@ class FaceMatcher:
         cursor = conn.cursor(dictionary=True)
         cursor.execute("SELECT id, role, faceEncoding FROM persons WHERE faceEncoding IS NOT NULL")
         rows = cursor.fetchall()
-        self.known_encodings = [np.array(json.loads(r['faceEncoding'])) for r in rows]
-        self.known_ids = [r['id'] for r in rows]
-        self.known_roles = [r['role'] for r in rows]
-        self.last_load = time.time()
         cursor.close()
         conn.close()
+
+        valid_enc, valid_ids, valid_roles = [], [], []
+        skipped = 0
+        for r in rows:
+            try:
+                enc = np.array(json.loads(r['faceEncoding']), dtype=np.float64)
+                if enc.shape == (128,):   # face_recognition always yields 128-d vectors
+                    valid_enc.append(enc)
+                    valid_ids.append(r['id'])
+                    valid_roles.append(r['role'])
+                else:
+                    skipped += 1
+            except (json.JSONDecodeError, ValueError):
+                skipped += 1
+        if skipped:
+            logger.warning(f"FaceMatcher: skipped {skipped} person(s) with invalid/empty encodings")
+        self.known_encodings = valid_enc
+        self.known_ids       = valid_ids
+        self.known_roles     = valid_roles
+        self.last_load = time.time()
 
     def match(self, encoding):
         if not self.known_encodings: return None, 0.0, None
