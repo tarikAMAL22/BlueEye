@@ -317,7 +317,13 @@ export default function LiveAlertsFeed() {
 
                   {/* Confidence + Eye */}
                   <div className="text-right flex-shrink-0">
-                    <div className="text-lg font-bold data-value text-primary mb-2">{alert.confidence}%</div>
+                    {(alert.metadata as any)?.bodyOnlyDetection ? (
+                      <Badge className="bg-orange-500/20 border border-orange-500/50 text-orange-400 text-[10px] font-bold uppercase mb-2 px-2 py-1">
+                        NO FACE
+                      </Badge>
+                    ) : (
+                      <div className="text-lg font-bold data-value text-primary mb-2">{alert.confidence}%</div>
+                    )}
                     <Button size="sm" variant="ghost"
                       onClick={e => { e.stopPropagation(); setLocation(`/alerts/${alert.id}`); }}
                       className="text-primary hover:text-primary hover:bg-primary/10">

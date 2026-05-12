@@ -65,12 +65,20 @@ class FaceEngine:
     def _load_identities(self) -> None:
         try:
             persons = db.fetch_all_persons()
-            encodings = [np.array(p["faceEncoding"], dtype=np.float64) for p in persons]
+            # Skip persons with no face encoding (body-only detections have encoding=[])
+            valid = [(p, np.array(p["faceEncoding"], dtype=np.float64))
+                     for p in persons if p.get("faceEncoding")]
+            valid_persons   = [pair[0] for pair in valid]
+            valid_encodings = [pair[1] for pair in valid]
             with self._lock:
-                self._known_persons = persons
-                self._known_encodings = encodings
+                self._known_persons   = valid_persons
+                self._known_encodings = valid_encodings
                 self._last_reload = time.time()
-            logger.debug("Identities reloaded — %d persons", len(persons))
+            skipped = len(persons) - len(valid_persons)
+            logger.debug(
+                "Identities reloaded — %d persons (%d skipped — no encoding)",
+                len(valid_persons), skipped,
+            )
         except Exception as exc:
             logger.error("Identity reload failed: %s", exc)
 

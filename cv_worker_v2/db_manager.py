@@ -312,7 +312,8 @@ def get_recent_alert_encoding(camera_id: int, window_sec: float) -> Optional[Lis
     if row is None:
         return None
     try:
-        return json.loads(row["faceEncoding"])
+        enc = json.loads(row["faceEncoding"])
+        return enc if enc else None  # treat [] (body-only) as no encoding
     except (json.JSONDecodeError, TypeError):
         return None
 

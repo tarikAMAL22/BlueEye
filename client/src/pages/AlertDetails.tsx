@@ -247,9 +247,10 @@ export default function AlertDetails() {
     );
   }
 
-  const isUnknown = !alert.personId
+  const isBodyOnly = !!(alert.metadata as any)?.bodyOnlyDetection;
+  const isUnknown = !isBodyOnly && (!alert.personId
     || getPersonName(alert.personId).toLowerCase().includes("unknown")
-    || getPersonRole(alert.personId) === "UNKNOWN";
+    || getPersonRole(alert.personId) === "UNKNOWN");
 
   return (
     <div className="space-y-6 p-8">
@@ -282,7 +283,12 @@ export default function AlertDetails() {
             <h3 className="text-sm font-medium mb-3 flex items-center gap-2">
               <Video className="w-4 h-4 text-primary" /> Best Frame Capture
             </h3>
-            {(alert.metadata as any)?.multiPersonFrame && (
+            {isBodyOnly && (
+              <div className="flex items-center gap-2 mb-2 px-3 py-2 rounded-lg bg-orange-600/20 border border-orange-500/50 text-orange-400 text-xs font-bold uppercase">
+                <Users className="w-4 h-4" /> Body Only — No Face Visible
+              </div>
+            )}
+            {!isBodyOnly && (alert.metadata as any)?.multiPersonFrame && (
               <div className="flex items-center gap-2 mb-2 px-3 py-2 rounded-lg bg-red-600/20 border border-red-500/50 text-red-400 text-xs font-bold uppercase">
                 <Users className="w-4 h-4" /> Multiple Persons Detected
               </div>
@@ -332,24 +338,33 @@ export default function AlertDetails() {
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <h3 className="text-sm font-medium mb-3">Face Snapshot</h3>
+              <h3 className="text-sm font-medium mb-3">{isBodyOnly ? "Body Snapshot" : "Face Snapshot"}</h3>
               <div className="aspect-square rounded-xl border border-border/50 bg-muted flex items-center justify-center overflow-hidden">
                 {alert.faceSnapshotUrl
-                  ? <img src={alert.faceSnapshotUrl} alt="Face" className="w-full h-full object-cover" />
+                  ? <img src={alert.faceSnapshotUrl} alt={isBodyOnly ? "Body" : "Face"} className="w-full h-full object-cover" />
                   : <AlertCircle className="w-8 h-8 text-muted-foreground" />}
               </div>
             </div>
             <div className="flex flex-col justify-end">
               <div className="p-4 rounded-xl border border-border/50 bg-card/50">
                 <h3 className="text-sm font-medium mb-2">Confidence</h3>
-                <div className="flex items-center gap-3">
-                  <div className="flex-1">
-                    <div className="w-full h-3 bg-muted rounded-full overflow-hidden">
-                      <div className="h-full bg-gradient-to-r from-primary to-secondary" style={{ width: `${alert.confidence}%` }} />
-                    </div>
+                {isBodyOnly ? (
+                  <div className="flex flex-col gap-1.5">
+                    <Badge className="bg-orange-500/20 border border-orange-500/50 text-orange-400 text-[10px] font-bold uppercase w-fit px-2 py-1">
+                      NO FACE
+                    </Badge>
+                    <span className="text-[10px] text-muted-foreground">Person detected — no face visible</span>
                   </div>
-                  <span className="text-xl font-bold text-primary">{alert.confidence}%</span>
-                </div>
+                ) : (
+                  <div className="flex items-center gap-3">
+                    <div className="flex-1">
+                      <div className="w-full h-3 bg-muted rounded-full overflow-hidden">
+                        <div className="h-full bg-gradient-to-r from-primary to-secondary" style={{ width: `${alert.confidence}%` }} />
+                      </div>
+                    </div>
+                    <span className="text-xl font-bold text-primary">{alert.confidence}%</span>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -386,7 +401,7 @@ export default function AlertDetails() {
                   </div>
                 </div>
               )}
-              {alert.personId && (
+              {alert.personId && !isBodyOnly && (
                 <Button variant="destructive" size="sm" onClick={handleUnassign}
                   className="h-8 px-2 text-[10px] uppercase font-bold">
                   Not Him

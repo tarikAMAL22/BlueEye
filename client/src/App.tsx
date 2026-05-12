@@ -19,6 +19,7 @@ import BlacklistManagement from "./pages/BlacklistManagement";
 import MotionDetections from "./pages/MotionDetections";
 import AlertDetails from "./pages/AlertDetails";
 import MovementDetails from "./pages/MovementDetails";
+import ManageUnknownReview from "./pages/ManageUnknownReview";
 import { useAuth } from "./_core/hooks/useAuth";
 
 function Router() {
@@ -61,6 +62,7 @@ function Router() {
         
         {/* Admin-only routes */}
         <Route path={"/persons"}>{isAdmin ? <PersonRegistry /> : <Forbidden />}</Route>
+        <Route path={"/persons/review"}>{isAdmin ? <ManageUnknownReview /> : <Forbidden />}</Route>
         <Route path={"/persons/:id"}>{isAdmin ? <PersonDetails /> : <Forbidden />}</Route>
         <Route path={"/cameras"}>{isAdmin ? <CameraManagement /> : <Forbidden />}</Route>
         <Route path={"/zones"}>{isAdmin ? <ZoneManagement /> : <Forbidden />}</Route>

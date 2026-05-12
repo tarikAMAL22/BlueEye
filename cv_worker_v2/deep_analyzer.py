@@ -27,6 +27,7 @@ import logging
 import os
 import time
 import threading
+import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
@@ -36,6 +37,7 @@ import pymysql
 from . import config
 from . import db_manager as db
 from .face_engine import engine as face_engine
+from .biometric_memory import memory as bio_memory
 
 logger = logging.getLogger(__name__)
 
@@ -235,10 +237,13 @@ class DeepAnalyzer(threading.Thread):
 
     def _fetch_pending_alerts(self) -> List[Dict[str, Any]]:
         sql = (
-            "SELECT id, bestFrameSnapshotUrl, metadata "
-            "FROM alerts "
-            "WHERE metadata IS NULL "
-            "   OR JSON_EXTRACT(metadata, '$.deepAnalyzed') IS NULL "
+            "SELECT a.id, a.bestFrameSnapshotUrl, a.metadata, "
+            "       a.personId, a.cameraId, a.zoneId, "
+            "       m.id AS movementId "
+            "FROM alerts a "
+            "LEFT JOIN movements m ON m.alertId = a.id "
+            "WHERE a.metadata IS NULL "
+            "   OR JSON_EXTRACT(a.metadata, '$.deepAnalyzed') IS NULL "
             "LIMIT 10"
         )
         with db.get_connection() as conn:
@@ -292,8 +297,21 @@ class DeepAnalyzer(threading.Thread):
                 )
 
     def _analyze_alert(self, alert: Dict[str, Any]) -> None:
-        alert_id: int = alert["id"]
+        alert_id: int       = alert["id"]
+        primary_person_id   = alert.get("personId")
+        camera_id           = alert.get("cameraId")
+        zone_id             = alert.get("zoneId")
+        movement_id         = alert.get("movementId")
         frame_url: Optional[str] = alert.get("bestFrameSnapshotUrl")
+
+        # Don't create further secondaries from an alert that is itself secondary
+        existing_meta: Dict[str, Any] = {}
+        if alert.get("metadata"):
+            try:
+                existing_meta = json.loads(alert["metadata"])
+            except (json.JSONDecodeError, TypeError):
+                pass
+        is_secondary_alert = bool(existing_meta.get("secondaryDetection") or existing_meta.get("deepDetection"))
 
         logger.info("DeepAnalyzer: Processing alert #%d …", alert_id)
 
@@ -403,11 +421,282 @@ class DeepAnalyzer(threading.Thread):
                 engine_used["faceDetector"],
                 elapsed_ms,
             )
+            # ── 9. Secondary alert creation for RetinaFace-only detections ─
+            if (not is_secondary_alert and camera_id and zone_id
+                    and movement_id and frame_url):
+                primary_encoding = encodings[0] if encodings else None
+                self._create_secondary_from_deep(
+                    alert_id=alert_id,
+                    frame_bgr=frame_bgr,
+                    rgb=rgb,
+                    retinaface_detections=face_detections,
+                    body_detections=body_detections,
+                    hog_locations=locations,
+                    primary_person_id=primary_person_id,
+                    primary_encoding=primary_encoding,
+                    camera_id=camera_id,
+                    zone_id=zone_id,
+                    primary_movement_id=movement_id,
+                    frame_snap_url=frame_url,
+                )
         else:
             logger.info(
                 "DeepAnalyzer: Alert #%d — OK (bodies=%d, faces=%d, %d ms)",
                 alert_id, detected_bodies_count, detected_faces_count, elapsed_ms,
             )
+
+    # ── Secondary alert creation from deep analysis ───────────────────────────
+
+    def _create_secondary_from_deep(
+        self,
+        alert_id: int,
+        frame_bgr: np.ndarray,
+        rgb: np.ndarray,
+        retinaface_detections: List[Dict[str, Any]],
+        body_detections: List[Dict[str, Any]],
+        hog_locations: List,
+        primary_person_id: Optional[int],
+        primary_encoding: Optional[np.ndarray],
+        camera_id: int,
+        zone_id: int,
+        primary_movement_id: int,
+        frame_snap_url: str,
+    ) -> None:
+        """
+        Create secondary movement + alert for:
+          1. Faces RetinaFace detected but HOG missed.
+          2. YOLOv8 bodies that have no face inside them at all (back-turned / occluded).
+        Called only when effectivePersonCount > 1 and this is not itself a secondary.
+        """
+        settings  = db.get_settings()
+        tolerance = float(settings.get("cvRecognitionTolerance", config.RECOGNITION_TOLERANCE))
+        h, w      = frame_bgr.shape[:2]
+        MIN_FACE_PX = 30  # ignore noise detections smaller than this
+
+        for face_det in retinaface_detections:
+            x1, y1, x2, y2 = face_det["bbox"]
+            face_w = x2 - x1
+            face_h = y2 - y1
+
+            if min(face_w, face_h) < MIN_FACE_PX:
+                logger.debug(
+                    "DeepAnalyzer: secondary face %dx%d too small — skipped", face_w, face_h
+                )
+                continue
+
+            # face_recognition format: (top, right, bottom, left)
+            face_loc = (y1, x2, y2, x1)
+
+            # Skip if this RetinaFace detection overlaps a HOG-detected face
+            # (those faces were already handled at primary persist time)
+            overlaps_hog = any(
+                _iou_loc(face_loc, hog_loc) > 0.3
+                for hog_loc in hog_locations
+            )
+            if overlaps_hog:
+                continue
+
+            # Compute dlib encoding at the RetinaFace-detected location
+            try:
+                encs = face_engine.get_encodings_at_locations(rgb, [face_loc])
+            except Exception as exc:
+                logger.warning("DeepAnalyzer: deep secondary encode failed: %s", exc)
+                continue
+
+            if not encs:
+                continue
+
+            extra_enc = encs[0]
+
+            # Skip if encoding is too close to the primary person
+            if primary_encoding is not None:
+                if face_engine.compare_encodings(primary_encoding, extra_enc) > 0.85:
+                    logger.debug("DeepAnalyzer: secondary face matches primary — skipped")
+                    continue
+
+            # Identify
+            extra_person, extra_sim = face_engine.identify(extra_enc, tolerance=tolerance)
+            extra_person_id = extra_person["id"] if extra_person else None
+            is_blacklisted  = extra_person is not None and bool(extra_person.get("isBlacklisted"))
+
+            # Skip if identified as the same primary person
+            if extra_person_id and extra_person_id == primary_person_id:
+                continue
+
+            if extra_person is None:
+                extra_threat = "high"
+            elif is_blacklisted:
+                extra_threat = "critical"
+            else:
+                extra_threat = "low"
+
+            # Cooldown — bypass for blacklisted
+            if not is_blacklisted:
+                cooldown = int(settings.get("cvAlertCooldownSec", config.ALERT_COOLDOWN_SEC))
+                if not bio_memory.check_and_register(
+                    extra_enc, person_id=extra_person_id, cooldown_sec=cooldown
+                ):
+                    logger.info(
+                        "DeepAnalyzer: deep secondary person=%s suppressed by cooldown",
+                        extra_person_id,
+                    )
+                    continue
+
+            # Save face crop
+            pad  = int(max(face_w, face_h) * 0.20)
+            cx1  = max(0, x1 - pad)
+            cy1  = max(0, y1 - pad)
+            cx2  = min(w, x2 + pad)
+            cy2  = min(h, y2 + pad)
+            crop = frame_bgr[cy1:cy2, cx1:cx2]
+            sec_face_url = (
+                _deep_save_image(crop, "face_secondary")
+                if crop.size > 0
+                else frame_snap_url
+            )
+
+            # Auto-register unknown
+            if extra_person_id is None:
+                extra_person_id = db.insert_unknown_person(
+                    extra_enc.tolist(), photo_url=sec_face_url
+                )
+                extra_threat = "high"
+
+            # Create secondary movement + alert
+            sec_movement_id = db.create_movement(
+                camera_id=camera_id,
+                zone_id=zone_id,
+                tracker_id=f"deep_{alert_id}_sec",
+                frame_urls=[],
+                best_frame_url=frame_snap_url,
+                face_crop_url=sec_face_url,
+                face_count=1,
+                frame_count=1,
+                alert_id=None,
+            )
+            sec_alert_id = db.create_alert(
+                camera_id=camera_id,
+                zone_id=zone_id,
+                person_id=extra_person_id,
+                threat_level=extra_threat,
+                confidence=round(extra_sim * 100, 2),
+                face_snapshot_url=sec_face_url,
+                best_frame_url=frame_snap_url,
+                metadata={
+                    "multiPersonFrame":   True,
+                    "secondaryDetection": True,
+                    "deepDetection":      True,
+                    "deepAnalyzed":       True,
+                    "primaryAlertId":     alert_id,
+                    "primaryMovementId":  primary_movement_id,
+                },
+            )
+            db.link_movement_to_alert(sec_movement_id, sec_alert_id)
+            logger.info(
+                "DeepAnalyzer: Deep secondary alert #%d movement #%d person=%s threat=%s",
+                sec_alert_id, sec_movement_id, extra_person_id, extra_threat,
+            )
+
+        # ── Body-only detections: YOLOv8 bodies with no face inside them ─────
+        # For each body bbox, check if any RetinaFace face center falls within it.
+        # If not, this person has no detectable face → create body-only secondary.
+        MIN_BODY_CONF = 0.50  # ignore low-confidence body detections
+        MIN_BODY_PX   = 80    # body must be at least this tall (pixels)
+
+        for body_det in body_detections:
+            bx1, by1, bx2, by2 = body_det["bbox"]
+            body_conf = body_det.get("confidence", 1.0)
+            body_h    = by2 - by1
+
+            if body_conf < MIN_BODY_CONF or body_h < MIN_BODY_PX:
+                continue
+
+            # Check if any RetinaFace face center falls inside this body bbox
+            has_face = any(
+                bx1 < (fd["bbox"][0] + fd["bbox"][2]) / 2 < bx2
+                and by1 < (fd["bbox"][1] + fd["bbox"][3]) / 2 < by2
+                for fd in retinaface_detections
+            )
+            if has_face:
+                continue  # already handled by face-detection path above
+
+            # This body has no associated face — crop head/upper-body area
+            # Use top 40% of the bbox as the "head crop" snapshot
+            head_y2 = by1 + int(body_h * 0.40)
+            head_crop = frame_bgr[by1:head_y2, bx1:bx2]
+            body_snap_url = (
+                _deep_save_image(head_crop, "body_secondary")
+                if head_crop.size > 0
+                else frame_snap_url
+            )
+
+            # Register as unknown person (no encoding available)
+            body_person_id = db.insert_unknown_person([], photo_url=body_snap_url)
+
+            # Draw orange body bounding box on a dedicated best-frame for this alert
+            body_annotated = frame_bgr.copy()
+            cv2.rectangle(body_annotated, (bx1, by1), (bx2, by2), (0, 140, 255), 3)
+            body_frame_url = _deep_save_image(body_annotated, "body_frame")
+
+            sec_movement_id = db.create_movement(
+                camera_id=camera_id,
+                zone_id=zone_id,
+                tracker_id=f"deep_{alert_id}_body",
+                frame_urls=[],
+                best_frame_url=body_frame_url,
+                face_crop_url=body_snap_url,
+                face_count=0,
+                frame_count=1,
+                alert_id=None,
+            )
+            sec_alert_id = db.create_alert(
+                camera_id=camera_id,
+                zone_id=zone_id,
+                person_id=body_person_id,
+                threat_level="high",
+                confidence=0.0,
+                face_snapshot_url=body_snap_url,
+                best_frame_url=body_frame_url,
+                metadata={
+                    "multiPersonFrame":   True,
+                    "secondaryDetection": True,
+                    "deepDetection":      True,
+                    "deepAnalyzed":       True,
+                    "bodyOnlyDetection":  True,
+                    "primaryAlertId":     alert_id,
+                    "primaryMovementId":  primary_movement_id,
+                },
+            )
+            db.link_movement_to_alert(sec_movement_id, sec_alert_id)
+            logger.info(
+                "DeepAnalyzer: Body-only secondary alert #%d movement #%d (no face — back/occluded)",
+                sec_alert_id, sec_movement_id,
+            )
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _iou_loc(loc_a: tuple, loc_b: tuple) -> float:
+    """IoU for (top, right, bottom, left) face_recognition format."""
+    top_a, right_a, bottom_a, left_a = loc_a
+    top_b, right_b, bottom_b, left_b = loc_b
+    i_top    = max(top_a,    top_b)
+    i_right  = min(right_a,  right_b)
+    i_bottom = min(bottom_a, bottom_b)
+    i_left   = max(left_a,   left_b)
+    inter    = max(0, i_right - i_left) * max(0, i_bottom - i_top)
+    if inter == 0:
+        return 0.0
+    area_a = (right_a - left_a) * (bottom_a - top_a)
+    area_b = (right_b - left_b) * (bottom_b - top_b)
+    return inter / (area_a + area_b - inter)
+
+
+def _deep_save_image(image: np.ndarray, prefix: str = "img") -> str:
+    filename = f"{prefix}_{uuid.uuid4().hex}.jpg"
+    path     = os.path.join(config.UPLOAD_DIR, filename)
+    cv2.imwrite(path, image, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    return f"/uploads/{filename}"
 
 
 # ── Module-level singleton ────────────────────────────────────────────────────

@@ -381,8 +381,6 @@ export async function updateSettings(data: Partial<InsertSetting>) {
   }
 }
 
-import * as fs from "fs";
-import * as path from "path";
 
 export async function clearAlertsAndEvents() {
   const db = await getDb();
@@ -412,30 +410,7 @@ export async function fullSystemReset() {
     console.log("[System Reset] Clearing persons...");
     await db.delete(persons);
     
-    // 2. Clear Uploads Folder
-    // Use an absolute path based on the project root
-    const projectRoot = path.resolve(process.cwd());
-    const uploadDir = path.join(projectRoot, "client", "public", "uploads");
-    
-    console.log(`[System Reset] Cleaning uploads directory: ${uploadDir}`);
-    if (fs.existsSync(uploadDir)) {
-      const files = fs.readdirSync(uploadDir);
-      let count = 0;
-      for (const file of files) {
-        if (file === ".gitkeep") continue;
-        try {
-          fs.unlinkSync(path.join(uploadDir, file));
-          count++;
-        } catch (err) {
-          console.warn(`[System Reset] Failed to delete file ${file}:`, err);
-        }
-      }
-      console.log(`[System Reset] Deleted ${count} files.`);
-    } else {
-      console.warn(`[System Reset] Upload directory not found at ${uploadDir}`);
-    }
-
-    console.log("[System Reset] Completed Full System Reset.");
+    console.log("[System Reset] Completed Full System Reset. Upload files preserved.");
     return { success: true };
   } catch (error) {
     console.error("[System Reset] Error during reset:", error);

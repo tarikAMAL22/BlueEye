@@ -222,10 +222,10 @@ def _do_persist(job: PersistJob) -> None:
     if tracker.best.location:
         ft, fr, fb, fl = tracker.best.location
         cv2.rectangle(full_frame_marked, (fl, ft), (fr, fb), (0, 200, 50), 2)
-    face_snap_url  = _save_image(tracker.best.crop_bgr, prefix="face")
-    frame_snap_url = _save_image(full_frame_marked,     prefix="frame")
+    frame_snap_url = _save_image(full_frame_marked, prefix="frame")
 
     # Auto face-count on full frame (Haar cascade, thread-safe)
+    h_full, w_full = tracker.best.full_frame.shape[:2]
     gray_full = cv2.cvtColor(tracker.best.full_frame, cv2.COLOR_BGR2GRAY)
     haar_faces = _haar.detectMultiScale(
         gray_full, scaleFactor=1.1, minNeighbors=4, minSize=(30, 30),
@@ -233,9 +233,40 @@ def _do_persist(job: PersistJob) -> None:
     face_count = int(len(haar_faces)) if len(haar_faces) > 0 else 0
     multi_person = face_count > 1
 
+    # Re-crop face snapshot using the Haar detection that best overlaps the tracked location.
+    # Haar gives a tight frontal-face bbox → correct framing, no body bleed-in.
+    # Falls back to the HOG-tracked crop if no matching Haar face is found.
+    primary_haar = None
+    if len(haar_faces) > 0 and tracker.best.location:
+        best_iou = 0.0
+        for haar_cand in haar_faces:
+            hx, hy, hw, hh = haar_cand
+            haar_loc = (hy, hx + hw, hy + hh, hx)  # (top,right,bottom,left)
+            iou_score = _iou(haar_loc, tracker.best.location)
+            if iou_score > best_iou and iou_score > 0.10:
+                best_iou = iou_score
+                primary_haar = haar_cand
+
+    if primary_haar is not None:
+        hx, hy, hw, hh = primary_haar
+        pad  = int(max(hw, hh) * 0.20)
+        cx1  = max(0, hx - pad)
+        cy1  = max(0, hy - pad)
+        cx2  = min(w_full, hx + hw + pad)
+        cy2  = min(h_full, hy + hh + pad)
+        haar_crop = tracker.best.full_frame[cy1:cy2, cx1:cx2]
+        if haar_crop.size > 0:
+            face_snap_url = _save_image(haar_crop, prefix="face")
+            logger.debug("[cam-%d] tracker=%s face_snap from Haar (%dx%d)", camera_id, tracker.tracker_id, hw, hh)
+        else:
+            face_snap_url = _save_image(tracker.best.crop_bgr, prefix="face")
+            logger.debug("[cam-%d] tracker=%s face_snap Haar crop empty → HOG fallback", camera_id, tracker.tracker_id)
+    else:
+        face_snap_url = _save_image(tracker.best.crop_bgr, prefix="face")
+        logger.debug("[cam-%d] tracker=%s face_snap no Haar match → HOG fallback", camera_id, tracker.tracker_id)
+
     detected_face_urls: list = []
-    if multi_person and len(haar_faces) > 0:
-        h_full, w_full = tracker.best.full_frame.shape[:2]
+    if multi_person:
         for (hx, hy, hw, hh) in haar_faces:
             pad = int(max(hw, hh) * 0.20)
             x1 = max(0, hx - pad)
