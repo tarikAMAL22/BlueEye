@@ -354,15 +354,8 @@ class FaceMatcher:
         self.known_roles = []
         self.last_load = 0
     
-    def load(self):
-        if time.time() - self.last_load < 30: return
-        conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT id, role, faceEncoding FROM persons WHERE faceEncoding IS NOT NULL")
-        rows = cursor.fetchall()
-        cursor.close()
-        conn.close()
-
+    def _parse_rows(self, rows: list) -> tuple:
+        """Parse DB rows into (encodings, ids, roles), skipping bad entries."""
         valid_enc, valid_ids, valid_roles = [], [], []
         skipped = 0
         for r in rows:
@@ -378,9 +371,20 @@ class FaceMatcher:
                 skipped += 1
         if skipped:
             logger.warning(f"FaceMatcher: skipped {skipped} person(s) with invalid/empty encodings")
-        self.known_encodings = valid_enc
-        self.known_ids       = valid_ids
-        self.known_roles     = valid_roles
+        return valid_enc, valid_ids, valid_roles, skipped
+
+    def load(self):
+        if time.time() - self.last_load < 30: return
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT id, role, faceEncoding FROM persons WHERE faceEncoding IS NOT NULL")
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        enc, ids, roles, _ = self._parse_rows(rows)
+        self.known_encodings = enc
+        self.known_ids       = ids
+        self.known_roles     = roles
         self.last_load = time.time()
 
     def match(self, encoding):
