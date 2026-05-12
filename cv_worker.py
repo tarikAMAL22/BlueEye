@@ -50,6 +50,11 @@ def is_valid_face_crop(face_image) -> bool:
     ratio = h / w
     if ratio < 0.8 or ratio > 2.5:                    # non-face aspect ratio
         return False
+    # BGR sanity: blue channel should not dominate red by >1.5× (catches RGB/BGR swap)
+    b_mean = float(np.mean(face_image[:, :, 0]))
+    r_mean = float(np.mean(face_image[:, :, 2]))
+    if r_mean > 0 and b_mean > r_mean * 1.5:
+        return False
     return True
 
 

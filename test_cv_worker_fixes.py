@@ -66,6 +66,14 @@ sharp_face = np.random.randint(50, 200, (200, 160, 3), dtype=np.uint8)
 check("Valid sharp face crop accepted",
       is_valid_face_crop(sharp_face))
 
+# BGR/RGB swap: blue dominates red by >1.5× (e.g. RGB image saved without cvtColor)
+bgr_swapped = np.zeros((200, 160, 3), dtype=np.uint8)
+bgr_swapped[:, :, 0] = np.random.randint(155, 220, (200, 160), dtype=np.uint8)  # B high
+bgr_swapped[:, :, 1] = np.random.randint(60,  150, (200, 160), dtype=np.uint8)  # G medium
+bgr_swapped[:, :, 2] = np.random.randint(20,   70, (200, 160), dtype=np.uint8)  # R low
+check("BGR/RGB-swapped crop rejected (b_mean > r_mean * 1.5)",
+      not is_valid_face_crop(bgr_swapped))
+
 # ═══════════════════════════════════════════════════════════════
 # FaceMatcher._parse_rows  (encoding validation)
 # ═══════════════════════════════════════════════════════════════

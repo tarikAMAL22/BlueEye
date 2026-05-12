@@ -257,15 +257,26 @@ def _do_persist(job: PersistJob) -> None:
         cx2  = min(w_full, hx + hw + pad)
         cy2  = min(h_full, hy + hh + pad)
         haar_crop = tracker.best.full_frame[cy1:cy2, cx1:cx2]
-        if haar_crop.size > 0:
+        if haar_crop.size > 0 and _is_bgr_sane(haar_crop):
             face_snap_url = _save_image(haar_crop, prefix="face")
             logger.debug("[cam-%d] tracker=%s face_snap from Haar (%dx%d)", camera_id, tracker.tracker_id, hw, hh)
         else:
+            if haar_crop.size > 0 and not _is_bgr_sane(haar_crop):
+                logger.error(
+                    "[cam-%d] tracker=%s Haar crop has inverted channels (BGR/RGB bug) — HOG fallback",
+                    camera_id, tracker.tracker_id,
+                )
             face_snap_url = _save_image(tracker.best.crop_bgr, prefix="face")
-            logger.debug("[cam-%d] tracker=%s face_snap Haar crop empty → HOG fallback", camera_id, tracker.tracker_id)
+            logger.debug("[cam-%d] tracker=%s face_snap Haar crop empty/corrupt → HOG fallback", camera_id, tracker.tracker_id)
     else:
         face_snap_url = _save_image(tracker.best.crop_bgr, prefix="face")
         logger.debug("[cam-%d] tracker=%s face_snap no Haar match → HOG fallback", camera_id, tracker.tracker_id)
+
+    if not _is_bgr_sane(tracker.best.crop_bgr):
+        logger.error(
+            "[cam-%d] tracker=%s HOG crop_bgr has inverted channels — possible BGR/RGB bug upstream",
+            camera_id, tracker.tracker_id,
+        )
 
     detected_face_urls: list = []
     if multi_person:
@@ -1030,6 +1041,12 @@ def _create_secondary_alerts(
         x1, y1 = max(0, hx - pad), max(0, hy - pad)
         x2, y2 = min(w_full, hx + hw + pad), min(h_full, hy + hh + pad)
         sec_crop = tracker.best.full_frame[y1:y2, x1:x2]
+        if sec_crop.size > 0 and not _is_bgr_sane(sec_crop):
+            logger.error(
+                "[cam-%d] secondary Haar crop has inverted channels — skipping save, using frame snap",
+                camera_id,
+            )
+            sec_crop = np.zeros((0,), dtype=np.uint8)  # force fallback
         sec_face_url = _save_image(sec_crop, prefix="face_secondary") if sec_crop.size > 0 else frame_snap_url
 
         # Auto-register unknown secondary person
@@ -1068,6 +1085,15 @@ def _create_secondary_alerts(
             "[cam-%d] Secondary alert #%d movement #%d person=%s threat=%s (multi-person frame)",
             camera_id, sec_alert_id, sec_movement_id, extra_person_id, extra_threat,
         )
+
+
+def _is_bgr_sane(img: np.ndarray) -> bool:
+    """Return False when blue channel dominates red by >1.5× — likely an RGB/BGR swap."""
+    if img.ndim < 3 or img.shape[2] < 3:
+        return True
+    b_mean = float(np.mean(img[:, :, 0]))
+    r_mean = float(np.mean(img[:, :, 2]))
+    return not (r_mean > 0 and b_mean > r_mean * 1.5)
 
 
 def _save_image(image: np.ndarray, prefix: str = "img") -> str:
