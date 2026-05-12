@@ -168,7 +168,7 @@ def create_alert(
             cur.execute(sql, payload)
             alert_id = cur.lastrowid
         conn.commit()
-    logger.info("Alert created id=%d person=%d threat=%s confidence=%.2f", alert_id, person_id, threat_level, confidence)
+    logger.info("Alert created id=%d person=%s threat=%s confidence=%.2f", alert_id, person_id, threat_level, confidence)
     return alert_id
 
 

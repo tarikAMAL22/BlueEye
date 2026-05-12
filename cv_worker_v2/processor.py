@@ -227,10 +227,12 @@ def _do_persist(job: PersistJob) -> None:
     # Auto face-count on full frame (Haar cascade, thread-safe)
     h_full, w_full = tracker.best.full_frame.shape[:2]
     gray_full = cv2.cvtColor(tracker.best.full_frame, cv2.COLOR_BGR2GRAY)
-    haar_faces = _haar.detectMultiScale(
-        gray_full, scaleFactor=1.1, minNeighbors=4, minSize=(30, 30),
+    haar_raw = _haar.detectMultiScale(
+        gray_full, scaleFactor=1.1, minNeighbors=6, minSize=(50, 50),
     )
-    face_count = int(len(haar_faces)) if len(haar_faces) > 0 else 0
+    # Deduplicate: remove overlapping / contained false-positive detections
+    haar_faces = _nms_haar(list(haar_raw) if len(haar_raw) else [])
+    face_count  = len(haar_faces)
     multi_person = face_count > 1
 
     # Re-crop face snapshot using the Haar detection that best overlaps the tracked location.
@@ -900,6 +902,46 @@ def _flush_stale_trackers(
             to_remove.append(tid)
     for tid in to_remove:
         trackers.pop(tid, None)
+
+
+def _nms_haar(faces, iou_thresh: float = 0.25) -> list:
+    """Non-maximum suppression for Haar detections (x, y, w, h).
+
+    Two passes:
+      1. IOU — suppress any candidate that overlaps a larger detection above
+         iou_thresh (catches the same face detected twice at different scales).
+      2. Containment — suppress any candidate whose center falls inside a
+         larger detection (catches a body-region false positive sitting just
+         below a real face detection with zero overlap).
+    """
+    if len(faces) <= 1:
+        return list(faces)
+
+    # Largest area first so we always keep the most confident detection.
+    sorted_f = sorted(faces, key=lambda f: f[2] * f[3], reverse=True)
+    keep: list = []
+
+    for cx, cy, cw, ch in sorted_f:
+        suppress = False
+        for rx, ry, rw, rh in keep:
+            # IOU
+            ix1 = max(cx, rx);   iy1 = max(cy, ry)
+            ix2 = min(cx+cw, rx+rw); iy2 = min(cy+ch, ry+rh)
+            inter = max(0, ix2-ix1) * max(0, iy2-iy1)
+            if inter > 0:
+                union = cw*ch + rw*rh - inter
+                if union > 0 and inter/union > iou_thresh:
+                    suppress = True
+                    break
+            # Center containment: candidate's center inside a kept bbox?
+            ccx, ccy = cx + cw // 2, cy + ch // 2
+            if rx <= ccx <= rx+rw and ry <= ccy <= ry+rh:
+                suppress = True
+                break
+        if not suppress:
+            keep.append((cx, cy, cw, ch))
+
+    return keep
 
 
 def _iou(loc_a: tuple, loc_b: tuple) -> float:
