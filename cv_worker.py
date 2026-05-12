@@ -36,34 +36,58 @@ def get_db_connection():
             time.sleep(5)
 
 def process_final_alert(cam, alert_data, cursor, conn):
-    cam_id = cam.get('id')
-    zone_id = cam.get('zoneId', 1)
-    face_image = alert_data['face_image']
-    frame = alert_data['full_frame']
+    cam_id      = cam.get('id')
+    zone_id     = cam.get('zoneId', 1)
+    face_image  = alert_data['face_image']
+    frame       = alert_data['full_frame']
     face_encoding = alert_data['face_encoding']
-    person_id = alert_data['person_id']
-    confidence = alert_data['confidence']
-    role = alert_data['role']
-    
-    unique_id = str(uuid.uuid4())
-    face_filename = f"face_{unique_id}.jpg"
+    person_id   = alert_data['person_id']
+    confidence  = alert_data['confidence']
+    role        = alert_data['role']
+    face_visible = alert_data.get('face_visible', True)
+
+    unique_id      = str(uuid.uuid4())
+    face_filename  = f"face_{unique_id}.jpg"
     frame_filename = f"frame_{unique_id}.jpg"
-    
-    face_path = os.path.join(UPLOAD_DIR, face_filename)
+    face_path  = os.path.join(UPLOAD_DIR, face_filename)
     frame_path = os.path.join(UPLOAD_DIR, frame_filename)
-    
-    cv2.imwrite(face_path, face_image, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
-    cv2.imwrite(frame_path, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-    
-    face_url = f"/uploads/{face_filename}"
+    cv2.imwrite(face_path,  face_image, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+    cv2.imwrite(frame_path, frame,      [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+    face_url  = f"/uploads/{face_filename}"
     frame_url = f"/uploads/{frame_filename}"
-    
+
+    if not face_visible:
+        # Person looking away / profile: no reliable encoding — create body-only alert.
+        metadata = json.dumps({"bodyOnlyDetection": True})
+        logger.info(f"🚨 NO-FACE ALERT on {cam.get('name')} (back/profile — no identity)")
+        try:
+            cursor.execute("""
+                INSERT INTO alerts
+                    (personId, cameraId, zoneId, faceSnapshotUrl,
+                     bestFrameSnapshotUrl, confidence, status, threatLevel, metadata)
+                VALUES (NULL, %s, %s, %s, %s, NULL, 'active', 'high', %s)
+            """, (cam_id, zone_id, face_url, frame_url, metadata))
+            cursor.execute("""
+                INSERT INTO events
+                    (personId, cameraId, zoneId, faceSnapshotUrl,
+                     bestFrameSnapshotUrl, confidence, eventType)
+                VALUES (NULL, %s, %s, %s, %s, NULL, 'unknown')
+            """, (cam_id, zone_id, face_url, frame_url))
+            conn.commit()
+        except Exception as e:
+            logger.error(f"DB Error (no-face alert): {e}")
+            conn.rollback()
+        return
+
+    # Normal face-visible path
     if not person_id:
         try:
-            unknown_name = f"unknown-{unique_id[:8]}"
+            unknown_name  = f"unknown-{unique_id[:8]}"
             encoding_json = json.dumps(face_encoding.tolist())
-            cursor.execute("INSERT INTO persons (name, role, photoUrl, faceEncoding) VALUES (%s, 'UNKNOWN', %s, %s)", 
-                         (unknown_name, face_url, encoding_json))
+            cursor.execute(
+                "INSERT INTO persons (name, role, photoUrl, faceEncoding) VALUES (%s, 'UNKNOWN', %s, %s)",
+                (unknown_name, face_url, encoding_json),
+            )
             person_id = cursor.lastrowid
             conn.commit()
             role = 'UNKNOWN'
@@ -71,19 +95,22 @@ def process_final_alert(cam, alert_data, cursor, conn):
             conn.rollback()
             role = 'UNKNOWN'
 
-    threat = 'high' if role == 'UNKNOWN' else 'medium'
+    threat     = 'high' if role == 'UNKNOWN' else 'medium'
     event_type = 'recognized' if (role and role != 'UNKNOWN') else 'unknown'
-    
+
     logger.info(f"🚨 ALERT: {role} (ID: {person_id}) on {cam.get('name')}")
-    
+
     try:
         cursor.execute("""
-            INSERT INTO alerts (personId, cameraId, zoneId, faceSnapshotUrl, bestFrameSnapshotUrl, confidence, status, threatLevel) 
+            INSERT INTO alerts
+                (personId, cameraId, zoneId, faceSnapshotUrl,
+                 bestFrameSnapshotUrl, confidence, status, threatLevel)
             VALUES (%s, %s, %s, %s, %s, %s, 'active', %s)
         """, (person_id, cam_id, zone_id, face_url, frame_url, confidence, threat))
-        
         cursor.execute("""
-            INSERT INTO events (personId, cameraId, zoneId, faceSnapshotUrl, bestFrameSnapshotUrl, confidence, eventType) 
+            INSERT INTO events
+                (personId, cameraId, zoneId, faceSnapshotUrl,
+                 bestFrameSnapshotUrl, confidence, eventType)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
         """, (person_id, cam_id, zone_id, face_url, frame_url, confidence, event_type))
         conn.commit()
@@ -164,6 +191,7 @@ def process_camera(cam, matcher, last_alert_times, pending_alerts):
 
                     # 1. Biometric Cooldown Check (The 'Ultimate' Filter)
                     # Check if this face (unknown or known) has alerted recently on this camera
+                    now = time.time()
                     is_too_recent = False
                     with biometric_memory_lock:
                         if cam_id in biometric_memory:
@@ -190,10 +218,20 @@ def process_camera(cam, matcher, last_alert_times, pending_alerts):
                     top, right, bottom, left = [b * 2 for b in box]
                     if (bottom - top) < 40: # Ignore tiny distant faces/noise
                         continue
-                    
-                    tracking_id = person_id
-                    
-                    # Smart Tracking for Unknowns: 
+
+                    # 4. Face-visibility check via inter-ocular distance
+                    # Landmarks are in small_frame space; ×2 to match full-frame coords.
+                    face_width = right - left
+                    face_visible = True
+                    if 'left_eye' in landmark and 'right_eye' in landmark:
+                        le = np.mean(landmark['left_eye'], axis=0)
+                        re = np.mean(landmark['right_eye'], axis=0)
+                        eye_dist = float(np.linalg.norm(re - le)) * 2
+                        face_visible = eye_dist > face_width * 0.15
+                    else:
+                        face_visible = False
+
+                    # Smart Tracking for Unknowns:
                     # If it's unknown, look if we already have a pending unknown nearby
                     tracking_id = person_id
                     if not person_id:
@@ -204,7 +242,7 @@ def process_camera(cam, matcher, last_alert_times, pending_alerts):
                                 # Calculate distance between current detection and existing tracker
                                 old_top, old_left = p_data.get('last_pos', (top, left))
                                 dist = ((top - old_top)**2 + (left - old_left)**2)**0.5
-                                if dist < 400: # 400px radius for same person tracking
+                                if dist < 120: # 120px radius — prevents cross-person tracker merging
                                     found_tracker = p_key[1]
                                     break
                         
@@ -215,7 +253,6 @@ def process_camera(cam, matcher, last_alert_times, pending_alerts):
                             tracking_id = f"unk_{str(uuid.uuid4())[:8]}"
                     
                     key = (cam_id, tracking_id)
-                    
                     now = time.time()
                     if key in last_alert_times and (now - last_alert_times[key]) < ALERT_COOLDOWN_SECONDS:
                         continue
@@ -230,16 +267,31 @@ def process_camera(cam, matcher, last_alert_times, pending_alerts):
                     pending_alerts[key]['last_seen_time'] = now
                     if size > pending_alerts[key]['best_size']:
                         h, w = frame.shape[:2]
-                        pad = int((bottom-top)*0.3)
-                        s_top, s_bottom = max(0, top-pad), min(h, bottom+int(pad*1.2))
-                        s_left, s_right = max(0, left-pad), min(w, right+pad)
+                        pad = int((bottom - top) * 0.25)   # symmetric padding
+                        s_top    = max(0, top    - pad)
+                        s_bottom = min(h, bottom + pad)
+                        s_left   = max(0, left   - pad)
+                        s_right  = min(w, right  + pad)
                         face_img = frame[s_top:s_bottom, s_left:s_right]
-                        if face_img.size > 0:
-                            if face_img.shape[0] < 512: face_img = cv2.resize(face_img, (512, 512), interpolation=cv2.INTER_LANCZOS4)
-                            pending_alerts[key].update({
-                                'best_size': size, 'face_image': face_img, 'full_frame': frame.copy(),
-                                'face_encoding': encoding, 'person_id': person_id, 'confidence': confidence, 'role': role
-                            })
+                        MIN_FACE_PX = 80
+                        if face_img.size == 0 or face_img.shape[0] < MIN_FACE_PX or face_img.shape[1] < MIN_FACE_PX:
+                            continue  # crop too small — skip rather than upscale garbage
+                        # Sharpness guard: only overwrite if new crop is at least 70% as sharp
+                        new_sharpness = cv2.Laplacian(face_img, cv2.CV_64F).var()
+                        if new_sharpness < pending_alerts[key].get('sharpness', 0) * 0.70:
+                            continue
+                        # Proportional upscale (not forced square) if crop is below target height
+                        if face_img.shape[0] < 512:
+                            scale = 512 / face_img.shape[0]
+                            new_w = int(face_img.shape[1] * scale)
+                            face_img = cv2.resize(face_img, (new_w, 512), interpolation=cv2.INTER_LANCZOS4)
+                        pending_alerts[key].update({
+                            'best_size': size, 'sharpness': new_sharpness,
+                            'face_image': face_img, 'full_frame': frame.copy(),
+                            'face_encoding': encoding, 'person_id': person_id,
+                            'confidence': confidence, 'role': role,
+                            'face_visible': face_visible,
+                        })
 
             # Buffer window: Increase to 3.0s for better grouping of moving people
             now = time.time()
