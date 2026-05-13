@@ -221,6 +221,13 @@ def _do_persist(job: PersistJob) -> None:
     full_frame_marked = tracker.best.full_frame.copy()
     if tracker.best.location:
         ft, fr, fb, fl = tracker.best.location
+        # location is already in full-frame coords (scaled back at detection time).
+        # Clamp to frame bounds before drawing to avoid out-of-range rectangles.
+        h_fm, w_fm = full_frame_marked.shape[:2]
+        ft = max(0, min(h_fm, ft))
+        fb = max(0, min(h_fm, fb))
+        fl = max(0, min(w_fm, fl))
+        fr = max(0, min(w_fm, fr))
         cv2.rectangle(full_frame_marked, (fl, ft), (fr, fb), (0, 200, 50), 2)
     frame_snap_url = _save_image(full_frame_marked, prefix="frame")
 
