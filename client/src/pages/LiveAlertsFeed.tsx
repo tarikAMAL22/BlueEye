@@ -24,7 +24,11 @@ export default function LiveAlertsFeed() {
     { refetchInterval: autoRefresh ? 5000 : false }
   );
 
-  const { data: zonesList } = trpc.zones.list.useQuery();
+  const { data: zonesList }   = trpc.zones.list.useQuery();
+  const { data: camerasList } = trpc.cameras.list.useQuery();
+
+  const getCameraName = (id: number) => camerasList?.find((c: any) => c.id === id)?.name ?? `CAM #${id}`;
+  const getZoneName   = (id: number) => zonesList?.find((z: any) => z.id === id)?.name ?? `ZONE #${id}`;
 
   const hasFilters = filterStatus !== "all" || filterZoneId !== "all" || filterThreat !== "all";
 
@@ -151,7 +155,12 @@ export default function LiveAlertsFeed() {
             animate={{ opacity: 1 }}
           >
             {alerts.map((alert: any) => (
-              <AlertCard key={alert.id} alert={alert} />
+              <AlertCard
+                key={alert.id}
+                alert={alert}
+                cameraName={getCameraName(alert.cameraId)}
+                zoneName={getZoneName(alert.zoneId)}
+              />
             ))}
           </motion.div>
         </AnimatePresence>

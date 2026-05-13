@@ -2,7 +2,7 @@ import { motion } from "framer-motion";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useToast } from "@/hooks/use-toast";
-import { CheckCircle, ArrowUpCircle, XCircle, User, Users } from "lucide-react";
+import { CheckCircle, ArrowUpCircle, XCircle, User, Users, Camera, MapPin } from "lucide-react";
 
 const THREAT_BORDER: Record<string, string> = {
   low: "#10B981",
@@ -35,6 +35,8 @@ type AlertShape = {
 
 interface Props {
   alert: AlertShape;
+  cameraName?: string;
+  zoneName?: string;
 }
 
 function ago(ts: Date | string | null | undefined): string {
@@ -54,7 +56,7 @@ const STATUS_COLOR: Record<string, string> = {
   dismissed: "#64748B",
 };
 
-export function AlertCard({ alert }: Props) {
+export function AlertCard({ alert, cameraName, zoneName }: Props) {
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const utils = trpc.useUtils();
@@ -152,20 +154,30 @@ export function AlertCard({ alert }: Props) {
       </div>
 
       {/* ── Info section ─────────────────────────────────────────── */}
-      <div className="px-2.5 pt-2 pb-1.5 space-y-1">
-        <div className="text-[11px] font-mono font-bold text-[#E2E8F0] truncate">
+      <div className="px-2.5 pt-2 pb-1.5 space-y-1.5">
+        {/* Person name */}
+        <div className="text-[12px] font-mono font-bold text-[#E2E8F0] truncate">
           {alert.person?.name ?? "INCONNU"}
         </div>
 
-        <div className="flex items-center justify-between">
-          <span className="text-[10px] font-mono text-[#64748B]">
-            {alert.zoneId ? `ZONE #${alert.zoneId}` : "—"}
-          </span>
-          <span className="text-[9px] font-mono text-[#475569]">{ago(alert.timestamp)}</span>
+        {/* Camera + Zone — prominent */}
+        <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#1E293B] flex-1 min-w-0">
+            <Camera className="w-2.5 h-2.5 text-[#00F5FF] flex-shrink-0" />
+            <span className="text-[10px] font-mono font-semibold text-[#CBD5E1] truncate">
+              {cameraName ?? `CAM #${alert.cameraId}`}
+            </span>
+          </div>
+          <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#1E293B] flex-1 min-w-0">
+            <MapPin className="w-2.5 h-2.5 text-[#F59E0B] flex-shrink-0" />
+            <span className="text-[10px] font-mono font-semibold text-[#CBD5E1] truncate">
+              {zoneName ?? `ZONE #${alert.zoneId}`}
+            </span>
+          </div>
         </div>
 
-        {/* Confidence bar */}
-        <div className="flex items-center gap-1.5 pt-0.5">
+        {/* Confidence bar + timestamp */}
+        <div className="flex items-center gap-1.5">
           <div className="flex-1 h-0.5 bg-[#1E293B] rounded-full overflow-hidden">
             <div
               className="h-full rounded-full transition-all"
@@ -179,6 +191,8 @@ export function AlertCard({ alert }: Props) {
             {confidence}%
           </span>
         </div>
+
+        <div className="text-[9px] font-mono text-[#475569]">{ago(alert.timestamp)}</div>
       </div>
 
       {/* ── Action buttons ───────────────────────────────────────── */}

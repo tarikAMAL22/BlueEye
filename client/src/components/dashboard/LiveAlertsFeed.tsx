@@ -6,6 +6,7 @@ import { X, RefreshCw } from "lucide-react";
 import { AlertCard } from "./AlertCard";
 import { HourlyChart } from "./HourlyChart";
 
+
 interface Props {
   selectedZoneId: number | null;
   onClearZone: () => void;
@@ -37,6 +38,11 @@ export function LiveAlertsFeed({ selectedZoneId, onClearZone }: Props) {
   const { data: alerts, isLoading } = trpc.alerts.list.useQuery(queryInput as any, {
     refetchInterval: autoRefresh ? 5000 : false,
   });
+  const { data: camerasList } = trpc.cameras.list.useQuery();
+  const { data: zonesList }   = trpc.zones.list.useQuery();
+
+  const getCameraName = (id: number) => camerasList?.find((c: any) => c.id === id)?.name ?? `CAM #${id}`;
+  const getZoneName   = (id: number) => zonesList?.find((z: any) => z.id === id)?.name ?? `ZONE #${id}`;
 
   let displayed = alerts ?? [];
 
@@ -119,9 +125,14 @@ export function LiveAlertsFeed({ selectedZoneId, onClearZone }: Props) {
           </div>
         )}
         <AnimatePresence initial={false}>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-2 xl:grid-cols-3 gap-2">
             {displayed.map((alert) => (
-              <AlertCard key={alert.id} alert={alert as any} />
+              <AlertCard
+                key={alert.id}
+                alert={alert as any}
+                cameraName={getCameraName((alert as any).cameraId)}
+                zoneName={getZoneName((alert as any).zoneId)}
+              />
             ))}
           </div>
         </AnimatePresence>
