@@ -210,6 +210,32 @@ export async function deletePerson(id: number) {
 
 // ============ ALERT QUERIES ============
 
+// Explicit column sets — avoids crashing on schema columns not yet migrated to the DB
+// (e.g. detectionType on alerts, zonePermissions/activityHistory on persons).
+const SAFE_ALERT_COLS = {
+  id:                   alerts.id,
+  personId:             alerts.personId,
+  cameraId:             alerts.cameraId,
+  zoneId:               alerts.zoneId,
+  faceSnapshotUrl:      alerts.faceSnapshotUrl,
+  bestFrameSnapshotUrl: alerts.bestFrameSnapshotUrl,
+  confidence:           alerts.confidence,
+  status:               alerts.status,
+  threatLevel:          alerts.threatLevel,
+  logs:                 alerts.logs,
+  metadata:             alerts.metadata,
+  timestamp:            alerts.timestamp,
+  createdAt:            alerts.createdAt,
+} as const;
+
+const SAFE_PERSON_COLS = {
+  id:            persons.id,
+  name:          persons.name,
+  role:          persons.role,
+  photoUrl:      persons.photoUrl,
+  isBlacklisted: persons.isBlacklisted,
+} as const;
+
 export async function getAlerts(filters: {
   limit?: number;
   status?: string;
@@ -225,10 +251,11 @@ export async function getAlerts(filters: {
   
   const limit = filters.limit ?? 50;
   
-  // Select both alert and person data
+  // Explicit column selection — avoids crashing on schema columns not yet
+  // migrated to the actual DB (e.g. detectionType, zonePermissions, activityHistory).
   let query = db.select({
-    alert: alerts,
-    person: persons,
+    alert: SAFE_ALERT_COLS,
+    person: SAFE_PERSON_COLS,
   }).from(alerts)
     .leftJoin(persons, eq(alerts.personId, persons.id));
   
@@ -276,23 +303,23 @@ export async function getAlerts(filters: {
 export async function getAlertsByPerson(personId: number, limit: number = 10) {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(alerts).where(eq(alerts.personId, personId)).orderBy(desc(alerts.timestamp)).limit(limit);
+  return db.select(SAFE_ALERT_COLS).from(alerts).where(eq(alerts.personId, personId)).orderBy(desc(alerts.timestamp)).limit(limit);
 }
 
 export async function getAlertById(id: number) {
   const db = await getDb();
   if (!db) return undefined;
-  
+
   const result = await db.select({
-    alert: alerts,
-    person: persons,
+    alert: SAFE_ALERT_COLS,
+    person: SAFE_PERSON_COLS,
   }).from(alerts)
     .leftJoin(persons, eq(alerts.personId, persons.id))
     .where(eq(alerts.id, id))
     .limit(1);
-    
+
   if (result.length === 0) return undefined;
-  
+
   return {
     ...result[0].alert,
     person: result[0].person
