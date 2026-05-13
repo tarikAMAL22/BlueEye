@@ -486,60 +486,19 @@ export const appRouter = router({
     
     update: adminProcedure
       .input(z.object({
-        // Platform
-        platformName: z.string().optional(),
-        retentionDays: z.number().optional(),
-        clearOnStart: z.boolean().optional(),
-        testMode: z.boolean().optional(),
-        notificationPreferences: z.any().optional(),
-        // Detection pipeline
-        cvDetectionInterval: z.number().optional(),
-        cvDownscaleFactor: z.number().optional(),
-        cvFaceMinHeight: z.number().optional(),
-        cvLandmarkMinPoints: z.number().optional(),
-        cvFrameQueueSize: z.number().optional(),
-        cvDetectionWorkers: z.number().optional(),
-        cvDeepAnalysisEnabled: z.boolean().optional(),
-        // Tracking & recognition
-        cvSceneBufferSec: z.number().optional(),
-        cvRecognitionTolerance: z.number().optional(),
-        cvBiometricMergeSim: z.number().optional(),
-        cvSpatialMergePx: z.number().optional(),
-        cvSpatialBiometricSim: z.number().optional(),
-        cvInactivityTimeoutSec: z.number().optional(),
-        cvMinFrameCount: z.number().optional(),
-        // Alert dedup
-        cvAlertCooldownSec: z.number().optional(),
-        cvCameraDedupWindowSec: z.number().optional(),
+        platformName:             z.string().optional(),
+        retentionDays:            z.number().optional(),
+        clearOnStart:             z.boolean().optional(),
+        testMode:                 z.boolean().optional(),
+        notificationPreferences:  z.any().optional(),
       }))
       .mutation(async ({ input }) => {
         const data: any = {};
-        // Platform
-        if (input.platformName !== undefined) data.platformName = input.platformName;
-        if (input.retentionDays !== undefined) data.retentionDays = input.retentionDays;
-        if (input.clearOnStart !== undefined) data.clearOnStart = input.clearOnStart;
-        if (input.testMode !== undefined) data.testMode = input.testMode;
+        if (input.platformName            !== undefined) data.platformName            = input.platformName;
+        if (input.retentionDays           !== undefined) data.retentionDays           = input.retentionDays;
+        if (input.clearOnStart            !== undefined) data.clearOnStart            = input.clearOnStart;
+        if (input.testMode                !== undefined) data.testMode                = input.testMode;
         if (input.notificationPreferences !== undefined) data.notificationPreferences = input.notificationPreferences;
-        // Detection pipeline
-        if (input.cvDetectionInterval !== undefined) data.cvDetectionInterval = input.cvDetectionInterval;
-        if (input.cvDownscaleFactor !== undefined) data.cvDownscaleFactor = String(input.cvDownscaleFactor);
-        if (input.cvFaceMinHeight !== undefined) data.cvFaceMinHeight = input.cvFaceMinHeight;
-        if (input.cvLandmarkMinPoints !== undefined) data.cvLandmarkMinPoints = input.cvLandmarkMinPoints;
-        if (input.cvFrameQueueSize !== undefined) data.cvFrameQueueSize = input.cvFrameQueueSize;
-        if (input.cvDetectionWorkers !== undefined) data.cvDetectionWorkers = input.cvDetectionWorkers;
-        if (input.cvDeepAnalysisEnabled !== undefined) data.cvDeepAnalysisEnabled = input.cvDeepAnalysisEnabled;
-        // Tracking & recognition
-        if (input.cvSceneBufferSec !== undefined) data.cvSceneBufferSec = String(input.cvSceneBufferSec);
-        if (input.cvRecognitionTolerance !== undefined) data.cvRecognitionTolerance = String(input.cvRecognitionTolerance);
-        if (input.cvBiometricMergeSim !== undefined) data.cvBiometricMergeSim = String(input.cvBiometricMergeSim);
-        if (input.cvSpatialMergePx !== undefined) data.cvSpatialMergePx = input.cvSpatialMergePx;
-        if (input.cvSpatialBiometricSim !== undefined) data.cvSpatialBiometricSim = String(input.cvSpatialBiometricSim);
-        if (input.cvInactivityTimeoutSec !== undefined) data.cvInactivityTimeoutSec = String(input.cvInactivityTimeoutSec);
-        if (input.cvMinFrameCount !== undefined) data.cvMinFrameCount = input.cvMinFrameCount;
-        // Alert dedup
-        if (input.cvAlertCooldownSec !== undefined) data.cvAlertCooldownSec = input.cvAlertCooldownSec;
-        if (input.cvCameraDedupWindowSec !== undefined) data.cvCameraDedupWindowSec = String(input.cvCameraDedupWindowSec);
-
         return db.updateSettings(data);
       }),
     
@@ -646,6 +605,11 @@ export const appRouter = router({
         maxPresenceSeconds:         z.number().min(2).max(60),
         frameAnalysisIntervalMs:    z.number().int().min(50).max(2000),
         minFacePixels:              z.number().int().min(30).max(300),
+        faceMinHeightPx:            z.number().int().min(5).max(100),
+        landmarkMinPoints:          z.number().int().min(2).max(68),
+        imageDownscaleFactor:       z.number().min(0.1).max(1.0),
+        upsampleTimes:              z.number().int().min(0).max(3),
+        recognitionTolerance:       z.number().min(0.10).max(0.90),
       }))
       .mutation(async ({ ctx, input }) => {
         await db.upsertCvWorkerConfig({
@@ -657,6 +621,11 @@ export const appRouter = router({
           maxPresenceSeconds:         String(input.maxPresenceSeconds) as any,
           frameAnalysisIntervalMs:    input.frameAnalysisIntervalMs,
           minFacePixels:              input.minFacePixels,
+          faceMinHeightPx:            input.faceMinHeightPx,
+          landmarkMinPoints:          input.landmarkMinPoints,
+          imageDownscaleFactor:       String(input.imageDownscaleFactor) as any,
+          upsampleTimes:              input.upsampleTimes,
+          recognitionTolerance:       String(input.recognitionTolerance) as any,
         }, ctx.user.id);
         return { success: true };
       }),

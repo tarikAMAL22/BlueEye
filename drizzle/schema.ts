@@ -189,6 +189,13 @@ export const cvWorkerConfig = mysqlTable("cv_worker_config", {
   frameAnalysisIntervalMs: int("frame_analysis_interval_ms").notNull().default(150),
   minFacePixels:           int("min_face_pixels").notNull().default(50),
 
+  // ── Face detection filters (replaces hardcodes in cv_worker.py) ─────────
+  faceMinHeightPx:      int("face_min_height_px").notNull().default(20),
+  landmarkMinPoints:    int("landmark_min_points").notNull().default(10),
+  imageDownscaleFactor: decimal("image_downscale_factor", { precision: 3, scale: 2 }).notNull().default("0.50"),
+  upsampleTimes:        int("upsample_times").notNull().default(2),
+  recognitionTolerance: decimal("recognition_tolerance", { precision: 3, scale: 2 }).notNull().default("0.50"),
+
   updatedAt: timestamp("updated_at").defaultNow().onUpdateNow(),
   updatedBy: int("updated_by"),
 });
@@ -208,23 +215,6 @@ export const settings = mysqlTable("settings", {
   clearOnStart: boolean("clearOnStart").default(false).notNull(),
   testMode: boolean("testMode").default(false).notNull(),
   biometricThreshold: decimal("biometricThreshold", { precision: 3, scale: 2 }).default("0.50").notNull(),
-  // AI & CV Configuration
-  cvSceneBufferSec: decimal("cvSceneBufferSec", { precision: 4, scale: 2 }).default("3.00").notNull(),
-  cvDetectionInterval: int("cvDetectionInterval").default(2).notNull(),
-  cvDownscaleFactor: decimal("cvDownscaleFactor", { precision: 3, scale: 2 }).default("0.50").notNull(),
-  cvRecognitionTolerance: decimal("cvRecognitionTolerance", { precision: 3, scale: 2 }).default("0.50").notNull(),
-  cvAlertCooldownSec: int("cvAlertCooldownSec").default(60).notNull(),
-  cvDeepAnalysisEnabled: boolean("cvDeepAnalysisEnabled").default(true).notNull(),
-  cvFaceMinHeight: int("cvFaceMinHeight").default(40).notNull(),
-  cvLandmarkMinPoints: int("cvLandmarkMinPoints").default(25).notNull(),
-  cvBiometricMergeSim: decimal("cvBiometricMergeSim", { precision: 3, scale: 2 }).default("0.90").notNull(),
-  cvSpatialMergePx: int("cvSpatialMergePx").default(100).notNull(),
-  cvSpatialBiometricSim: decimal("cvSpatialBiometricSim", { precision: 3, scale: 2 }).default("0.30").notNull(),
-  cvInactivityTimeoutSec: decimal("cvInactivityTimeoutSec", { precision: 4, scale: 1 }).default("5.0").notNull(),
-  cvFrameQueueSize: int("cvFrameQueueSize").default(200).notNull(),
-  cvDetectionWorkers: int("cvDetectionWorkers").default(2).notNull(),
-  cvMinFrameCount: int("cvMinFrameCount").default(5).notNull(),
-  cvCameraDedupWindowSec: decimal("cvCameraDedupWindowSec", { precision: 4, scale: 1 }).default("5.0").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });

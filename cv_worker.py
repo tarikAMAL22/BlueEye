@@ -33,14 +33,20 @@ hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
 
 # ── Detection sensitivity config (DB-backed, live-reloaded every 30s) ────────
 _cv_config = {
-    'alert_cooldown_seconds':       5,    # was 30 — faster re-detection of follow-up persons
-    'biometric_memory_seconds':     20,   # was 45 — shorter dedup window
+    'alert_cooldown_seconds':       5,
+    'biometric_memory_seconds':     20,
     'biometric_distance_threshold': 0.40,
-    'tracking_radius_px':           80,   # was 100 — tighter, prevents merging adjacent persons
-    'detection_buffer_seconds':     1.0,  # was 1.5 — faster finalization per person
+    'tracking_radius_px':           80,
+    'detection_buffer_seconds':     1.0,
     'max_presence_seconds':         8.0,
     'frame_analysis_interval_ms':   150,
-    'min_face_pixels':              50,   # was 80 — catches background faces (65-75px crop)
+    'min_face_pixels':              50,
+    # Face detection filters — tunable via Settings UI
+    'face_min_height_px':           20,   # was hardcoded 20 in process_camera
+    'landmark_min_points':          10,   # was hardcoded 10 in process_camera
+    'image_downscale_factor':       0.5,  # was hardcoded fx=0.5 in process_camera
+    'upsample_times':               2,    # was hardcoded number_of_times_to_upsample=2
+    'recognition_tolerance':        0.50, # was hardcoded 0.5 in FaceMatcher.match()
 }
 _cv_config_lock = threading.Lock()
 
@@ -70,6 +76,11 @@ def load_cv_config_from_db(cursor):
                     'frame_analysis_interval_ms':   int(row['frame_analysis_interval_ms']),
                     # min_face_pixels > 55 kills background face crops (65-75px) — hard cap
                     'min_face_pixels':              min(55,  max(30,  int(row['min_face_pixels']))),
+                    'face_min_height_px':           min(60,  max(10,  int(row['face_min_height_px']))),
+                    'landmark_min_points':          min(30,  max(2,   int(row['landmark_min_points']))),
+                    'image_downscale_factor':       float(row['image_downscale_factor']),
+                    'upsample_times':               min(3,   max(0,   int(row['upsample_times']))),
+                    'recognition_tolerance':        float(row['recognition_tolerance']),
                 })
             logger.info(
                 f"CV Config reloaded: cooldown={_cv_config['alert_cooldown_seconds']}s "
@@ -501,10 +512,12 @@ def process_camera(cam, matcher, last_alert_times, pending_alerts):
             face_encodings_list = []
             landmarks_list      = []
             if persons_detected > 0:
-                small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
+                factor      = get_config('image_downscale_factor')
+                small_frame = cv2.resize(frame, (0, 0), fx=factor, fy=factor)
                 rgb_frame   = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
                 with cv_lock:
-                    face_locations = face_recognition.face_locations(rgb_frame, number_of_times_to_upsample=2)
+                    face_locations = face_recognition.face_locations(
+                        rgb_frame, number_of_times_to_upsample=get_config('upsample_times'))
                 if face_locations and len(face_locations) < 10:
                     with face_lock:
                         face_encodings_list = face_recognition.face_encodings(rgb_frame, face_locations)
@@ -565,14 +578,14 @@ def process_camera(cam, matcher, last_alert_times, pending_alerts):
             for box, encoding, landmark in zip(face_locations, face_encodings_list, landmarks_list):
                 # Anatomy filter
                 all_landmark_points = sum(len(p) for p in landmark.values())
-                if all_landmark_points < 10:
+                if all_landmark_points < get_config('landmark_min_points'):
                     continue
                 required = ['left_eye', 'right_eye']
                 if not all(k in landmark for k in required):
                     continue
 
                 top, right, bottom, left = [b * 2 for b in box]
-                if (bottom - top) < 20:
+                if (bottom - top) < get_config('face_min_height_px'):
                     continue
 
                 person_id, confidence, role = matcher.match(encoding)
@@ -794,7 +807,7 @@ class FaceMatcher:
             return None, 0.0, None
         distances = face_recognition.face_distance(self.known_encodings, encoding)
         idx = np.argmin(distances)
-        if distances[idx] < 0.5:
+        if distances[idx] < get_config('recognition_tolerance'):
             return self.known_ids[idx], round((1 - distances[idx]) * 100, 2), self.known_roles[idx]
         return None, round((1 - distances[idx]) * 100, 2), None
 

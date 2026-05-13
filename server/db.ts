@@ -630,14 +630,19 @@ export async function updateAccessRule(id: number, data: Partial<InsertAccessRul
 // ============ CV WORKER CONFIG QUERIES ============
 
 const CV_CONFIG_DEFAULTS: Omit<InsertCvWorkerConfig, 'id' | 'updatedAt' | 'updatedBy'> = {
-  alertCooldownSeconds:       30,
-  biometricMemorySeconds:     45,
+  alertCooldownSeconds:       5,
+  biometricMemorySeconds:     20,
   biometricDistanceThreshold: "0.40" as any,
-  trackingRadiusPx:           100,
-  detectionBufferSeconds:     "1.5" as any,
+  trackingRadiusPx:           80,
+  detectionBufferSeconds:     "1.0" as any,
   maxPresenceSeconds:         "8.0" as any,
   frameAnalysisIntervalMs:    150,
-  minFacePixels:              80,
+  minFacePixels:              50,
+  faceMinHeightPx:            20,
+  landmarkMinPoints:          10,
+  imageDownscaleFactor:       "0.50" as any,
+  upsampleTimes:              2,
+  recognitionTolerance:       "0.50" as any,
 };
 
 export async function getCvWorkerConfig(): Promise<CvWorkerConfig | null> {

@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Slider } from "@/components/ui/slider";
 import {
   Shield, User, Loader2, Trash2, AlertTriangle, RefreshCcw,
-  Bomb, Bug, Scan, Cpu, Activity, Bell, Film, FolderOpen, CheckCircle2, Zap,
+  Bomb, Bug, Bell, Film, FolderOpen, CheckCircle2, Zap,
 } from "lucide-react";
 
 // ─── Field helper ─────────────────────────────────────────────────────────────
@@ -58,27 +58,6 @@ export default function SystemSettings() {
   const [emailAlerts, setEmailAlerts]     = useState(true);
   const [pushAlerts, setPushAlerts]       = useState(true);
 
-  // Detection pipeline
-  const [cvDetectionInterval, setCvDetectionInterval]   = useState(2);
-  const [cvDownscaleFactor, setCvDownscaleFactor]       = useState(0.5);
-  const [cvFaceMinHeight, setCvFaceMinHeight]           = useState(40);
-  const [cvLandmarkMinPoints, setCvLandmarkMinPoints]   = useState(25);
-  const [cvFrameQueueSize, setCvFrameQueueSize]         = useState(200);
-  const [cvDetectionWorkers, setCvDetectionWorkers]     = useState(2);
-  const [cvDeepAnalysisEnabled, setCvDeepAnalysisEnabled] = useState(true);
-
-  // Tracking & recognition
-  const [cvSceneBufferSec, setCvSceneBufferSec]           = useState(3.0);
-  const [cvRecognitionTolerance, setCvRecognitionTolerance] = useState(0.5);
-  const [cvBiometricMergeSim, setCvBiometricMergeSim]     = useState(0.90);
-  const [cvSpatialMergePx, setCvSpatialMergePx]           = useState(100);
-  const [cvSpatialBiometricSim, setCvSpatialBiometricSim] = useState(0.30);
-  const [cvInactivityTimeoutSec, setCvInactivityTimeoutSec] = useState(5.0);
-  const [cvMinFrameCount, setCvMinFrameCount]             = useState(5);
-
-  // Alert dedup
-  const [cvAlertCooldownSec, setCvAlertCooldownSec]         = useState(60);
-  const [cvCameraDedupWindowSec, setCvCameraDedupWindowSec] = useState(5.0);
 
   const { data: settings, isLoading } = trpc.settings.get.useQuery();
   const updateMutation    = trpc.settings.update.useMutation();
@@ -99,24 +78,6 @@ export default function SystemSettings() {
       setPushAlerts(settings.notificationPreferences.pushAlerts ?? true);
     }
 
-    setCvDetectionInterval(settings.cvDetectionInterval || 2);
-    setCvDownscaleFactor(f(settings.cvDownscaleFactor as any) || 0.5);
-    setCvFaceMinHeight(settings.cvFaceMinHeight || 40);
-    setCvLandmarkMinPoints(settings.cvLandmarkMinPoints || 25);
-    setCvFrameQueueSize(settings.cvFrameQueueSize || 200);
-    setCvDetectionWorkers(settings.cvDetectionWorkers || 2);
-    setCvDeepAnalysisEnabled(settings.cvDeepAnalysisEnabled ?? true);
-
-    setCvSceneBufferSec(f(settings.cvSceneBufferSec as any) || 3.0);
-    setCvRecognitionTolerance(f(settings.cvRecognitionTolerance as any) || 0.5);
-    setCvBiometricMergeSim(f(settings.cvBiometricMergeSim as any) || 0.90);
-    setCvSpatialMergePx(settings.cvSpatialMergePx || 100);
-    setCvSpatialBiometricSim(f((settings as any).cvSpatialBiometricSim) || 0.30);
-    setCvInactivityTimeoutSec(f(settings.cvInactivityTimeoutSec as any) || 5.0);
-    setCvMinFrameCount((settings as any).cvMinFrameCount || 5);
-
-    setCvAlertCooldownSec(settings.cvAlertCooldownSec || 60);
-    setCvCameraDedupWindowSec(f((settings as any).cvCameraDedupWindowSec) || 5.0);
   }, [settings]);
 
   const handleSave = async () => {
@@ -127,22 +88,6 @@ export default function SystemSettings() {
         clearOnStart,
         testMode,
         notificationPreferences: { emailAlerts, pushAlerts },
-        cvDetectionInterval,
-        cvDownscaleFactor,
-        cvFaceMinHeight,
-        cvLandmarkMinPoints,
-        cvFrameQueueSize,
-        cvDetectionWorkers,
-        cvDeepAnalysisEnabled,
-        cvSceneBufferSec,
-        cvRecognitionTolerance,
-        cvBiometricMergeSim,
-        cvSpatialMergePx,
-        cvSpatialBiometricSim,
-        cvInactivityTimeoutSec,
-        cvMinFrameCount,
-        cvAlertCooldownSec,
-        cvCameraDedupWindowSec,
       });
       toast.success("Settings saved successfully");
     } catch (error) {
@@ -219,162 +164,6 @@ export default function SystemSettings() {
           </div>
 
           <VideoStreamPicker />
-        </CardContent>
-      </Card>
-
-      {/* ── Detection Pipeline ── */}
-      <Card className="glow-card bg-card/50 backdrop-blur border-primary/20">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Cpu className="w-5 h-5 text-primary" />
-            Detection Pipeline
-          </CardTitle>
-          <CardDescription>Frame capture, pre-processing and face detection filters</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-5">
-            <Field
-              label="Detection Interval (frames)"
-              hint={`Run detection every ${cvDetectionInterval} frames. Higher = less CPU.`}
-            >
-              <NumInput value={cvDetectionInterval} onChange={setCvDetectionInterval} min={1} integer />
-            </Field>
-
-            <Field
-              label="Image Downscale Factor"
-              hint={`Frame shrunk to ${Math.round(cvDownscaleFactor * 100)}% before detection. Recommended: 0.50.`}
-            >
-              <NumInput value={cvDownscaleFactor} onChange={setCvDownscaleFactor} min={0.1} max={1.0} step={0.05} />
-            </Field>
-
-            <Field
-              label="Min Face Height (px)"
-              hint="Faces smaller than this are ignored (background noise filter)."
-            >
-              <NumInput value={cvFaceMinHeight} onChange={setCvFaceMinHeight} min={20} integer />
-            </Field>
-
-            <Field
-              label="Min Landmark Points"
-              hint="Minimum facial landmarks required before accepting a detection."
-            >
-              <NumInput value={cvLandmarkMinPoints} onChange={setCvLandmarkMinPoints} min={5} integer />
-            </Field>
-
-            <Field
-              label="Frame Queue Size"
-              hint="Max frames buffered between capture and detection. Requires restart."
-            >
-              <NumInput value={cvFrameQueueSize} onChange={setCvFrameQueueSize} min={10} integer />
-            </Field>
-
-            <Field
-              label="Detection Workers"
-              hint="Parallel face-detection threads. Requires restart to take effect."
-            >
-              <NumInput value={cvDetectionWorkers} onChange={setCvDetectionWorkers} min={1} max={8} integer />
-            </Field>
-          </div>
-
-          <div className="mt-5 flex items-center justify-between p-4 rounded-lg border border-primary/20 bg-primary/5">
-            <div>
-              <Label className="text-sm font-bold flex items-center gap-2">
-                <Shield className="w-4 h-4 text-primary" />
-                Deep Secondary Analysis
-              </Label>
-              <p className="text-xs text-muted-foreground">High-precision secondary scan to detect crowds and multiple people</p>
-            </div>
-            <Switch checked={cvDeepAnalysisEnabled} onCheckedChange={setCvDeepAnalysisEnabled} />
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* ── Tracking & Recognition ── */}
-      <Card className="glow-card bg-card/50 backdrop-blur border-primary/20">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Scan className="w-5 h-5 text-primary" />
-            Tracking & Recognition
-          </CardTitle>
-          <CardDescription>Subject tracking, face matching thresholds and scene accumulation</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-5">
-            <Field
-              label="Scene Buffer (seconds)"
-              hint="Time to observe a subject before picking the best frame."
-            >
-              <NumInput value={cvSceneBufferSec} onChange={setCvSceneBufferSec} min={1} step={0.5} />
-            </Field>
-
-            <Field
-              label="Min Frames per Detection"
-              hint="A tracker must accumulate at least this many frames before being saved."
-            >
-              <NumInput value={cvMinFrameCount} onChange={setCvMinFrameCount} min={1} integer />
-            </Field>
-
-            <Field
-              label="Inactivity Timeout (seconds)"
-              hint="Flush a tracker after it hasn't been seen for this long."
-            >
-              <NumInput value={cvInactivityTimeoutSec} onChange={setCvInactivityTimeoutSec} min={0.5} step={0.5} />
-            </Field>
-
-            <Field
-              label="Recognition Tolerance"
-              hint="Face distance threshold for identification. Lower = stricter. Default: 0.50."
-            >
-              <NumInput value={cvRecognitionTolerance} onChange={setCvRecognitionTolerance} min={0.3} max={0.8} step={0.05} />
-            </Field>
-
-            <Field
-              label="Biometric Merge Similarity"
-              hint="Min similarity to merge two trackers as the same person. Also used for camera dedup."
-            >
-              <NumInput value={cvBiometricMergeSim} onChange={setCvBiometricMergeSim} min={0.5} max={1.0} step={0.05} />
-            </Field>
-
-            <Field
-              label="Spatial Merge Threshold (px)"
-              hint="Max centroid distance to merge a new detection into an existing tracker. 100px is correct for frame-to-frame tracking — do not increase above 150."
-            >
-              <NumInput value={cvSpatialMergePx} onChange={setCvSpatialMergePx} min={10} max={200} integer />
-            </Field>
-
-            <Field
-              label="Spatial Biometric Min Similarity"
-              hint="When a face is within the spatial threshold, it must score at least this similarity against the tracker's encoding. Same person frame-to-frame scores ~0.35–0.70; different people score <0.20."
-            >
-              <NumInput value={cvSpatialBiometricSim} onChange={setCvSpatialBiometricSim} min={0.1} max={0.6} step={0.05} />
-            </Field>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* ── Alert Rules ── */}
-      <Card className="glow-card bg-card/50 backdrop-blur border-primary/20">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Activity className="w-5 h-5 text-primary" />
-            Alert Rules
-          </CardTitle>
-          <CardDescription>Cooldown and deduplication rules for generated alerts</CardDescription>
-        </CardHeader>
-        <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-5">
-          <Field
-            label="Global Alert Cooldown (seconds)"
-            hint="Minimum time before the same person can trigger a new alert (any camera)."
-          >
-            <NumInput value={cvAlertCooldownSec} onChange={setCvAlertCooldownSec} min={0} integer />
-          </Field>
-
-          <Field
-            label="Camera Dedup Window (seconds)"
-            hint="If the same face appears on the same camera within this window, the alert is suppressed."
-          >
-            <NumInput value={cvCameraDedupWindowSec} onChange={setCvCameraDedupWindowSec} min={0} step={0.5} />
-          </Field>
         </CardContent>
       </Card>
 
@@ -568,6 +357,11 @@ function DetectionSensitivityCard() {
   const [maxPresence,        setMaxPresence]         = useState(8.0);
   const [analysisIntervalMs, setAnalysisIntervalMs]  = useState(150);
   const [minFacePx,          setMinFacePx]           = useState(50);
+  const [faceMinHeight,      setFaceMinHeight]       = useState(20);
+  const [landmarkMin,        setLandmarkMin]         = useState(10);
+  const [downscaleFactor,    setDownscaleFactor]     = useState(0.50);
+  const [upsampleTimes,      setUpsampleTimes]       = useState(2);
+  const [recognitionTol,     setRecognitionTol]      = useState(0.50);
 
   useEffect(() => {
     if (!cfg) return;
@@ -580,6 +374,11 @@ function DetectionSensitivityCard() {
     setMaxPresence(f(cfg.maxPresenceSeconds as any));
     setAnalysisIntervalMs(cfg.frameAnalysisIntervalMs);
     setMinFacePx(cfg.minFacePixels);
+    setFaceMinHeight((cfg as any).faceMinHeightPx ?? 20);
+    setLandmarkMin((cfg as any).landmarkMinPoints ?? 10);
+    setDownscaleFactor(f((cfg as any).imageDownscaleFactor) || 0.50);
+    setUpsampleTimes((cfg as any).upsampleTimes ?? 2);
+    setRecognitionTol(f((cfg as any).recognitionTolerance) || 0.50);
   }, [cfg]);
 
   const handleSave = async () => {
@@ -593,6 +392,11 @@ function DetectionSensitivityCard() {
         maxPresenceSeconds:         maxPresence,
         frameAnalysisIntervalMs:    analysisIntervalMs,
         minFacePixels:              minFacePx,
+        faceMinHeightPx:            faceMinHeight,
+        landmarkMinPoints:          landmarkMin,
+        imageDownscaleFactor:       downscaleFactor,
+        upsampleTimes:              upsampleTimes,
+        recognitionTolerance:       recognitionTol,
       });
       toast.success("Sensitivity settings saved — apply within 30s");
       refetch();
@@ -701,12 +505,54 @@ function DetectionSensitivityCard() {
             warn={analysisIntervalMs < 100 ? "Very low — high CPU load" : undefined}
           />
           <SliderField
-            label="Minimum Face Size"
+            label="Minimum Face Crop Size"
             value={minFacePx} onChange={setMinFacePx}
             min={30} max={300} step={10}
             format={v => s(v, "px")}
             note="crops smaller than this are ignored (person too far)"
             warn={minFacePx > 55 ? "Values above 55px prevent detection of persons at distance. Recommended: 50px" : undefined}
+          />
+        </SensGroup>
+
+        <SensGroup title="Face Detection Filters">
+          <SliderField
+            label="Min Face Height"
+            value={faceMinHeight} onChange={setFaceMinHeight}
+            min={5} max={100} step={5}
+            format={v => s(v, "px")}
+            note="minimum detected face height in full-frame pixels"
+            warn={faceMinHeight > 40 ? "Above 40px — background persons at distance will not be captured" : undefined}
+          />
+          <SliderField
+            label="Min Landmark Points"
+            value={landmarkMin} onChange={setLandmarkMin}
+            min={2} max={68} step={2}
+            format={v => String(v)}
+            note="real faces return 20-68 points; non-faces return 0"
+            warn={landmarkMin > 20 ? "Above 20 — small or angled faces will be rejected" : undefined}
+          />
+          <SliderField
+            label="Image Downscale Factor"
+            value={downscaleFactor} onChange={v => setDownscaleFactor(Math.round(v * 100) / 100)}
+            min={0.1} max={1.0} step={0.05}
+            format={v => `${Math.round(v * 100)}%`}
+            note="frame resolution before face_recognition — lower = faster CPU"
+          />
+          <SliderField
+            label="Upsample Times"
+            value={upsampleTimes} onChange={setUpsampleTimes}
+            min={0} max={3} step={1}
+            format={v => String(v)}
+            note="higher = detects smaller faces at cost of CPU"
+            warn={upsampleTimes > 2 ? "Above 2 — very high CPU load per frame" : undefined}
+          />
+          <SliderField
+            label="Recognition Tolerance"
+            value={recognitionTol} onChange={v => setRecognitionTol(Math.round(v * 100) / 100)}
+            min={0.10} max={0.90} step={0.01}
+            format={v => v.toFixed(2)}
+            note="face distance threshold for identification — lower = stricter"
+            warn={recognitionTol > 0.65 ? "High tolerance — same person may trigger multiple alerts" : undefined}
           />
         </SensGroup>
 
