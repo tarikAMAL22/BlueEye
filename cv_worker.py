@@ -207,6 +207,7 @@ def create_no_face_alert(cam, body_crop, full_frame, cursor, conn):
 
     logger.info(f"👤 NO-FACE PERSON detected on {cam.get('name')}")
 
+    alert_id = None
     try:
         cursor.execute("""
             INSERT INTO alerts
@@ -214,12 +215,37 @@ def create_no_face_alert(cam, body_crop, full_frame, cursor, conn):
                  bestFrameSnapshotUrl, confidence, status, threatLevel, detectionType)
             VALUES (NULL, %s, %s, %s, %s, NULL, 'active', 'medium', 'NO_FACE')
         """, (cam_id, zone_id, body_url, frame_url))
+        alert_id = cursor.lastrowid
+
         cursor.execute("""
             INSERT INTO events
                 (personId, cameraId, zoneId, faceSnapshotUrl,
                  bestFrameSnapshotUrl, confidence, eventType)
             VALUES (NULL, %s, %s, %s, %s, NULL, 'no_face')
         """, (cam_id, zone_id, body_url, frame_url))
+
+        # Create movement record so person appears in Motion Detections
+        tracker_id = f"nf_{str(uuid.uuid4())[:8]}"
+        try:
+            cursor.execute("""
+                INSERT INTO movements
+                    (cameraId, zoneId, trackerId, frameUrls,
+                     bestFrameUrl, faceCropUrl, faceCount,
+                     frameCount, alertId, suppressionReason)
+                VALUES (%s, %s, %s, %s, %s, %s, 0, 1, %s, NULL)
+            """, (cam_id, zone_id, tracker_id,
+                  json.dumps([frame_url]), frame_url, body_url, alert_id))
+        except Exception:
+            conn.rollback()
+            cursor.execute("""
+                INSERT INTO movements
+                    (cameraId, zoneId, trackerId, frameUrls,
+                     bestFrameUrl, faceCropUrl, faceCount,
+                     frameCount, alertId)
+                VALUES (%s, %s, %s, %s, %s, %s, 0, 1, %s)
+            """, (cam_id, zone_id, tracker_id,
+                  json.dumps([frame_url]), frame_url, body_url, alert_id))
+
         conn.commit()
     except Exception as e:
         logger.error(f"DB Error no_face alert: {e}")
@@ -515,9 +541,20 @@ def process_camera(cam, matcher, last_alert_times, pending_alerts):
                 factor      = get_config('image_downscale_factor')
                 small_frame = cv2.resize(frame, (0, 0), fx=factor, fy=factor)
                 rgb_frame   = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
+                upsample = get_config('upsample_times')
                 with cv_lock:
                     face_locations = face_recognition.face_locations(
-                        rgb_frame, number_of_times_to_upsample=get_config('upsample_times'))
+                        rgb_frame, model='hog', number_of_times_to_upsample=upsample)
+                    # If HOG found fewer faces than bodies, retry with one more upsample pass
+                    if len(face_locations) < persons_detected and upsample < 3:
+                        retry = face_recognition.face_locations(
+                            rgb_frame, model='hog', number_of_times_to_upsample=upsample + 1)
+                        if len(retry) > len(face_locations):
+                            face_locations = retry
+                            logger.debug(
+                                f"Upsample retry: {len(face_locations)} faces "
+                                f"vs {persons_detected} bodies"
+                            )
                 if face_locations and len(face_locations) < 10:
                     with face_lock:
                         face_encodings_list = face_recognition.face_encodings(rgb_frame, face_locations)
