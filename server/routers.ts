@@ -27,6 +27,21 @@ export const appRouter = router({
     stats: protectedProcedure.query(async () => {
       return db.getDashboardStats();
     }),
+    systemStatus: protectedProcedure.query(async () => {
+      return db.getDashboardSystemStatus();
+    }),
+    todayBreakdown: protectedProcedure.query(async () => {
+      return db.getDashboardTodayBreakdown();
+    }),
+    zoneStatus: protectedProcedure.query(async () => {
+      return db.getDashboardZoneStatus();
+    }),
+    hourlyActivity: protectedProcedure.query(async () => {
+      return db.getDashboardHourlyActivity();
+    }),
+    systemHealth: protectedProcedure.query(async () => {
+      return db.getDashboardSystemHealth();
+    }),
   }),
 
   // ============ CAMERAS ============
@@ -276,13 +291,15 @@ export const appRouter = router({
   // ============ ALERTS (LIVE ALERTS FEED) ============
   alerts: router({
     list: protectedProcedure
-      .input(z.object({ 
+      .input(z.object({
         limit: z.number().default(50),
         status: z.string().optional(),
         zoneId: z.number().optional(),
         personId: z.number().optional(),
         startDate: z.string().optional(),
         endDate: z.string().optional(),
+        threatLevel: z.string().optional(),
+        detectionType: z.enum(['FACE', 'NO_FACE']).optional(),
       }))
       .query(async ({ input }) => {
         return db.getAlerts(input);

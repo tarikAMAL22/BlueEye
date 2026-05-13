@@ -280,7 +280,7 @@ function DashboardLayoutContent({
             </div>
           </div>
         )}
-        <main className="flex-1 bg-background">{children}</main>
+        <main className="flex-1 bg-background flex flex-col min-h-0">{children}</main>
       </SidebarInset>
     </>
   );

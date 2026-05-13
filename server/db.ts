@@ -1,4 +1,4 @@
-import { eq, desc, and, like, gte, lte, ne, isNotNull } from "drizzle-orm";
+import { eq, desc, and, like, gte, lte, ne, isNotNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { InsertUser, users, cameras, zones, persons, alerts, events, settings, accessRules, movements, Camera, Zone, Person, Alert, Event, Setting, InsertCamera, InsertZone, InsertPerson, InsertAlert, InsertEvent, InsertSetting, InsertAccessRule, Movement } from "../drizzle/schema";
 import { ENV } from './_core/env';
@@ -210,13 +210,15 @@ export async function deletePerson(id: number) {
 
 // ============ ALERT QUERIES ============
 
-export async function getAlerts(filters: { 
-  limit?: number; 
-  status?: string; 
-  zoneId?: number; 
-  personId?: number; 
-  startDate?: string; 
-  endDate?: string; 
+export async function getAlerts(filters: {
+  limit?: number;
+  status?: string;
+  zoneId?: number;
+  personId?: number;
+  startDate?: string;
+  endDate?: string;
+  threatLevel?: string;
+  detectionType?: 'FACE' | 'NO_FACE';
 } = {}) {
   const db = await getDb();
   if (!db) return [];
@@ -245,6 +247,14 @@ export async function getAlerts(filters: {
   }
   if (filters.endDate) {
     conditions.push(lte(alerts.timestamp, new Date(filters.endDate)));
+  }
+  if (filters.threatLevel && filters.threatLevel !== 'all') {
+    conditions.push(eq(alerts.threatLevel, filters.threatLevel as any));
+  }
+  if (filters.detectionType === 'NO_FACE') {
+    conditions.push(sql`JSON_EXTRACT(${alerts.metadata}, '$.bodyOnlyDetection') = true`);
+  } else if (filters.detectionType === 'FACE') {
+    conditions.push(sql`(JSON_EXTRACT(${alerts.metadata}, '$.bodyOnlyDetection') IS NULL OR JSON_EXTRACT(${alerts.metadata}, '$.bodyOnlyDetection') != true)`);
   }
   
   if (conditions.length > 0) {
@@ -550,6 +560,138 @@ export async function updateAccessRule(id: number, data: Partial<InsertAccessRul
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   return db.update(accessRules).set(data).where(eq(accessRules.id, id));
+}
+
+// ============ DASHBOARD EXTENDED QUERIES ============
+
+export async function getDashboardSystemStatus() {
+  const db = await getDb();
+  if (!db) return { cvWorkerAlive: false, camerasOnline: 0, camerasTotal: 0, pendingAlerts: 0 };
+
+  let cvWorkerAlive = false;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 2000);
+    const res = await fetch("http://cv-worker:5000/health", { signal: ctrl.signal });
+    clearTimeout(timer);
+    cvWorkerAlive = res.ok;
+  } catch { /* offline */ }
+
+  const [cameraList, pendingList] = await Promise.all([
+    db.select({ status: cameras.status }).from(cameras),
+    db.select({ id: alerts.id }).from(alerts).where(eq(alerts.status, 'active')),
+  ]);
+
+  return {
+    cvWorkerAlive,
+    camerasOnline: cameraList.filter(c => c.status === 'online').length,
+    camerasTotal: cameraList.length,
+    pendingAlerts: pendingList.length,
+  };
+}
+
+export async function getDashboardTodayBreakdown() {
+  const db = await getDb();
+  if (!db) return { totalToday: 0, recognizedToday: 0, unknownToday: 0, unknownPercent: 0 };
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const rows = await db
+    .select({ eventType: events.eventType })
+    .from(events)
+    .where(gte(events.timestamp, today));
+
+  const totalToday = rows.length;
+  const recognizedToday = rows.filter(r => r.eventType === 'recognized' || r.eventType === 'recognition').length;
+  const unknownToday = rows.filter(r => r.eventType === 'unknown').length;
+  const unknownPercent = totalToday > 0 ? Math.round((unknownToday / totalToday) * 100) : 0;
+
+  return { totalToday, recognizedToday, unknownToday, unknownPercent };
+}
+
+export async function getDashboardZoneStatus() {
+  const db = await getDb();
+  if (!db) return [];
+
+  const [zoneList, activeAlertList, cameraList] = await Promise.all([
+    db.select().from(zones),
+    db.select({ zoneId: alerts.zoneId }).from(alerts).where(eq(alerts.status, 'active')),
+    db.select({ zoneId: cameras.zoneId, status: cameras.status }).from(cameras),
+  ]);
+
+  return zoneList.map(zone => ({
+    ...zone,
+    activeAlerts: activeAlertList.filter(a => a.zoneId === zone.id).length,
+    cameraCount: cameraList.filter(c => c.zoneId === zone.id).length,
+  }));
+}
+
+export async function getDashboardHourlyActivity() {
+  const db = await getDb();
+  if (!db) return Array.from({ length: 24 }, (_, h) => ({ hour: h, total: 0, recognized: 0, unknown: 0 }));
+
+  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const rows = await db
+    .select({ eventType: events.eventType, timestamp: events.timestamp })
+    .from(events)
+    .where(gte(events.timestamp, cutoff));
+
+  const hourMap = Array.from({ length: 24 }, (_, h) => ({ hour: h, total: 0, recognized: 0, unknown: 0 }));
+  for (const row of rows) {
+    const h = new Date(row.timestamp).getHours();
+    hourMap[h].total++;
+    if (row.eventType === 'recognized' || row.eventType === 'recognition') hourMap[h].recognized++;
+    else if (row.eventType === 'unknown') hourMap[h].unknown++;
+  }
+  return hourMap;
+}
+
+export async function getDashboardSystemHealth() {
+  const db = await getDb();
+  if (!db) {
+    return { personsTotal: 0, personsWithValidEncoding: 0, alertsTotal: 0, eventsTotal: 0, avgConfidence: 0, lastEventAt: null, recentEvents: [] };
+  }
+
+  const [[{ n: pTotal }], [{ n: aTotal }], [{ n: eTotal }], [avgRow], recentRaw] = await Promise.all([
+    db.select({ n: sql<string>`count(*)` }).from(persons),
+    db.select({ n: sql<string>`count(*)` }).from(alerts),
+    db.select({ n: sql<string>`count(*)` }).from(events),
+    db.select({ avg: sql<string>`AVG(CAST(confidence AS DECIMAL(10,2)))` }).from(alerts),
+    db.select({ event: events, person: persons })
+      .from(events)
+      .leftJoin(persons, eq(events.personId, persons.id))
+      .orderBy(desc(events.timestamp))
+      .limit(3),
+  ]);
+
+  const personsWithEnc = await db
+    .select({ faceEncoding: persons.faceEncoding })
+    .from(persons)
+    .where(isNotNull(persons.faceEncoding));
+
+  const personsWithValidEncoding = personsWithEnc.filter(p => {
+    try {
+      const enc = typeof p.faceEncoding === 'string' ? JSON.parse(p.faceEncoding) : p.faceEncoding;
+      return Array.isArray(enc) && enc.length === 128;
+    } catch { return false; }
+  }).length;
+
+  return {
+    personsTotal: Number(pTotal ?? 0),
+    personsWithValidEncoding,
+    alertsTotal: Number(aTotal ?? 0),
+    eventsTotal: Number(eTotal ?? 0),
+    avgConfidence: Math.round(parseFloat(avgRow?.avg ?? '0') || 0),
+    lastEventAt: recentRaw[0]?.event.timestamp ?? null,
+    recentEvents: recentRaw.map(r => ({
+      id: r.event.id,
+      cameraId: r.event.cameraId,
+      eventType: r.event.eventType,
+      personName: r.person?.name ?? null,
+      timestamp: r.event.timestamp,
+    })),
+  };
 }
 
 // ============ DASHBOARD STATS ============
