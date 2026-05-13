@@ -666,17 +666,26 @@ def process_camera(cam, matcher, last_alert_times, pending_alerts):
                     if key in biometric_memory:
                         elapsed = now - biometric_memory[key]
                         if elapsed < bio_window:
-                            is_too_recent      = True
-                            bio_last_seen_secs = round(elapsed, 1)
+                            # UNKNOWN persons are never suppressed by dedup —
+                            # each pass in a secured zone is a distinct security event.
+                            # Only suppress KNOWN, recognized persons.
+                            if person_id is not None and role != 'UNKNOWN':
+                                is_too_recent      = True
+                                bio_last_seen_secs = round(elapsed, 1)
                         else:
                             del biometric_memory[key]
 
                 # Cooldown check per tracker
+                # UNKNOWN persons get a shorter cooldown (5s minimum) to avoid
+                # alert flooding while still capturing each pass independently.
+                effective_cooldown = zone_cooldown
+                if person_id is None or role == 'UNKNOWN':
+                    effective_cooldown = max(5, zone_cooldown // 3)
                 cooldown_remaining = 0.0
                 if key in last_alert_times:
                     elapsed = now - last_alert_times[key]
-                    if elapsed < zone_cooldown:
-                        cooldown_remaining = round(zone_cooldown - elapsed, 1)
+                    if elapsed < effective_cooldown:
+                        cooldown_remaining = round(effective_cooldown - elapsed, 1)
 
                 # Classify suppression for this specific tracker
                 suppression_reason: str | None  = None
@@ -684,11 +693,11 @@ def process_camera(cam, matcher, last_alert_times, pending_alerts):
                 if is_too_recent:
                     suppression_reason  = 'dedup'
                     suppression_details = {'secondsAgo': bio_last_seen_secs, 'windowSeconds': bio_window}
-                    logger.info(f"Dedup: {cam.get('name')} tracker={tracking_id} seen {bio_last_seen_secs}s ago")
+                    logger.info(f"Dedup: {cam.get('name')} tracker={tracking_id} seen {bio_last_seen_secs}s ago (KNOWN person)")
                 elif cooldown_remaining > 0:
                     suppression_reason  = 'cooldown'
-                    suppression_details = {'secondsRemaining': cooldown_remaining, 'cooldownSeconds': zone_cooldown}
-                    logger.info(f"Cooldown: {cam.get('name')} tracker={tracking_id} — {cooldown_remaining}s left")
+                    suppression_details = {'secondsRemaining': cooldown_remaining, 'cooldownSeconds': effective_cooldown}
+                    logger.info(f"Cooldown: {cam.get('name')} tracker={tracking_id} — {cooldown_remaining}s left ({'UNKNOWN' if person_id is None else role})")
 
                 # Always register tracker so a movement record is saved even for suppressed persons
                 if key not in pending_alerts:
