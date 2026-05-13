@@ -320,16 +320,25 @@ def create_movement_record(cam, tracker_data, alert_id, cursor, conn):
         cv2.imwrite(os.path.join(UPLOAD_DIR, fname), tracker_data['full_frame'], [cv2.IMWRITE_JPEG_QUALITY, 85])
         best_frame_url = f"/uploads/{fname}"
 
+    # Best face crop → faceCropUrl
     if tracker_data.get('face_image') is not None:
         uid   = str(uuid.uuid4())
         fname = f"mov_face_{uid}.jpg"
         cv2.imwrite(os.path.join(UPLOAD_DIR, fname), tracker_data['face_image'], [cv2.IMWRITE_JPEG_QUALITY, 90])
         face_crop_url = f"/uploads/{fname}"
 
+    # All accumulated face crops → frameUrls (powers the movement flipbook)
+    all_urls = []
+    for i, crop in enumerate(tracker_data.get('face_images_all', [])):
+        uid   = str(uuid.uuid4())
+        fname = f"mov_crop_{uid}_{i}.jpg"
+        cv2.imwrite(os.path.join(UPLOAD_DIR, fname), crop['image'], [cv2.IMWRITE_JPEG_QUALITY, 88])
+        all_urls.append(f"/uploads/{fname}")
+
     suppression_reason  = tracker_data.get('suppression_reason')
     suppression_details = json.dumps(tracker_data.get('suppression_details') or {})
     face_count = tracker_data.get('face_count_seen', 1)
-    frame_urls = json.dumps([])
+    frame_urls = json.dumps(all_urls)
 
     try:
         cursor.execute("""
@@ -483,10 +492,14 @@ def process_camera(cam, matcher, last_alert_times, pending_alerts):
                 body_cx = bx_f + bw_f // 2
 
                 face_matched = False
+                body_cy = by_f + bh_f // 3  # face sits in the upper third of a body box
                 for top_hf, right_hf, bottom_hf, left_hf in face_locations:
-                    # Convert face half-frame coords to full-frame center
+                    # face_locations are in half-frame coords; multiply by 2 for full-frame:
+                    # center_x = ((left_hf + right_hf) / 2) * 2  = left_hf + right_hf
+                    # center_y = ((top_hf  + bottom_hf) / 2) * 2 = top_hf  + bottom_hf
                     face_cx_full = left_hf + right_hf
-                    if abs(face_cx_full - body_cx) < bw_f * 0.6:
+                    face_cy_full = top_hf  + bottom_hf
+                    if abs(face_cx_full - body_cx) < bw_f * 0.8 and abs(face_cy_full - body_cy) < bh_f * 0.6:
                         face_matched = True
                         break
 
@@ -539,6 +552,12 @@ def process_camera(cam, matcher, last_alert_times, pending_alerts):
                             old_top, old_left = p_data.get('last_pos', (top, left))
                             d = ((top - old_top) ** 2 + (left - old_left) ** 2) ** 0.5
                             if d < track_radius and d < best_dist:
+                                # Encoding check: reject if biometrically too different (different person)
+                                prev_enc = p_data.get('face_encoding')
+                                if prev_enc is not None:
+                                    enc_dist = face_recognition.face_distance([prev_enc], encoding)[0]
+                                    if enc_dist > 0.5:
+                                        continue
                                 best_dist    = d
                                 best_tracker = p_key[1]
                     tracking_id = best_tracker if best_tracker else f"unk_{str(uuid.uuid4())[:8]}"
@@ -635,6 +654,11 @@ def process_camera(cam, matcher, last_alert_times, pending_alerts):
                         'face_encoding': encoding, 'person_id': person_id,
                         'confidence': confidence, 'role': role,
                         'face_visible': face_visible,
+                    })
+                    # Accumulate every good crop so the movement record shows all faces seen
+                    pending_alerts[key].setdefault('face_images_all', []).append({
+                        'image': face_img, 'size': size,
+                        'face_visible': face_visible, 'encoding': encoding,
                     })
                     # Clear suppression if the tracker later captures a real face
                     pending_alerts[key]['suppression_reason']  = None
