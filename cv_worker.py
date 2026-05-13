@@ -60,15 +60,15 @@ def load_cv_config_from_db(cursor):
             with _cv_config_lock:
                 _cv_config.update({
                     # Floors/ceilings prevent stale DB values from re-breaking detection
-                    'alert_cooldown_seconds':       max(3,   int(row['alertCooldownSeconds'])),
-                    'biometric_memory_seconds':     max(10,  int(row['biometricMemorySeconds'])),
-                    'biometric_distance_threshold': float(row['biometricDistanceThreshold']),
-                    'tracking_radius_px':           min(120, int(row['trackingRadiusPx'])),
-                    'detection_buffer_seconds':     max(0.5, float(row['detectionBufferSeconds'])),
-                    'max_presence_seconds':         float(row['maxPresenceSeconds']),
-                    'frame_analysis_interval_ms':   int(row['frameAnalysisIntervalMs']),
+                    'alert_cooldown_seconds':       max(3,   int(row['alert_cooldown_seconds'])),
+                    'biometric_memory_seconds':     max(10,  int(row['biometric_memory_seconds'])),
+                    'biometric_distance_threshold': float(row['biometric_distance_threshold']),
+                    'tracking_radius_px':           min(120, int(row['tracking_radius_px'])),
+                    'detection_buffer_seconds':     max(0.5, float(row['detection_buffer_seconds'])),
+                    'max_presence_seconds':         float(row['max_presence_seconds']),
+                    'frame_analysis_interval_ms':   int(row['frame_analysis_interval_ms']),
                     # Never allow > 55 — values above 55 kill background face crops (65-75px)
-                    'min_face_pixels':              min(55,  int(row['minFacePixels'])),
+                    'min_face_pixels':              min(55,  int(row['min_face_pixels'])),
                 })
             logger.info(
                 f"CV Config reloaded: cooldown={_cv_config['alert_cooldown_seconds']}s "
