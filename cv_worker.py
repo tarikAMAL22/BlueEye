@@ -59,14 +59,16 @@ def load_cv_config_from_db(cursor):
         if row:
             with _cv_config_lock:
                 _cv_config.update({
-                    'alert_cooldown_seconds':       int(row['alertCooldownSeconds']),
-                    'biometric_memory_seconds':     int(row['biometricMemorySeconds']),
+                    # Floors/ceilings prevent stale DB values from re-breaking detection
+                    'alert_cooldown_seconds':       max(3,   int(row['alertCooldownSeconds'])),
+                    'biometric_memory_seconds':     max(10,  int(row['biometricMemorySeconds'])),
                     'biometric_distance_threshold': float(row['biometricDistanceThreshold']),
-                    'tracking_radius_px':           int(row['trackingRadiusPx']),
-                    'detection_buffer_seconds':     float(row['detectionBufferSeconds']),
+                    'tracking_radius_px':           min(120, int(row['trackingRadiusPx'])),
+                    'detection_buffer_seconds':     max(0.5, float(row['detectionBufferSeconds'])),
                     'max_presence_seconds':         float(row['maxPresenceSeconds']),
                     'frame_analysis_interval_ms':   int(row['frameAnalysisIntervalMs']),
-                    'min_face_pixels':              int(row['minFacePixels']),
+                    # Never allow > 55 — values above 55 kill background face crops (65-75px)
+                    'min_face_pixels':              min(55,  int(row['minFacePixels'])),
                 })
             logger.info(
                 f"CV Config reloaded: cooldown={_cv_config['alert_cooldown_seconds']}s "
@@ -511,30 +513,41 @@ def process_camera(cam, matcher, last_alert_times, pending_alerts):
             scale_x = frame.shape[1] / 640.0
             scale_y = frame.shape[0] / 360.0
 
+            # Each face index is matched to at most one body (closest-match wins)
+            matched_face_indices: set[int] = set()
+
             for bx, by, bw, bh in body_locations:
                 bx_f = int(bx * scale_x)
                 by_f = int(by * scale_y)
                 bw_f = int(bw * scale_x)
                 bh_f = int(bh * scale_y)
                 body_cx = bx_f + bw_f // 2
+                body_cy = by_f + bh_f // 4
 
-                face_matched = False
-                body_cy = by_f + bh_f // 4   # upper quarter — face sits near the top of a body box
-                for top_hf, right_hf, bottom_hf, left_hf in face_locations:
+                best_face_idx  = None
+                best_face_dist = float('inf')
+                tolerance_x = max(80, bw_f * 0.8)
+                tolerance_y = max(120, bh_f * 0.5)
+
+                for fi, (top_hf, right_hf, bottom_hf, left_hf) in enumerate(face_locations):
+                    if fi in matched_face_indices:
+                        continue
                     face_cx_full = left_hf + right_hf
                     face_cy_full = top_hf  + bottom_hf
-                    tolerance_x  = max(80, bw_f * 0.8)
-                    tolerance_y  = max(120, bh_f * 0.5)
                     if abs(face_cx_full - body_cx) < tolerance_x and abs(face_cy_full - body_cy) < tolerance_y:
-                        face_matched = True
-                        break
+                        dist = ((face_cx_full - body_cx) ** 2 + (face_cy_full - body_cy) ** 2) ** 0.5
+                        if dist < best_face_dist:
+                            best_face_dist = dist
+                            best_face_idx  = fi
 
-                if not face_matched:
+                if best_face_idx is not None:
+                    matched_face_indices.add(best_face_idx)
+                    # Face found for this body — face recognition loop handles it
+                else:
                     body_crop = frame[
                         max(0, by_f):min(frame.shape[0], by_f + bh_f),
                         max(0, bx_f):min(frame.shape[1], bx_f + bw_f),
                     ]
-                    # Spatial grid key prevents alert flooding for the same body position
                     body_key = (cam_id, f"body_{bx_f // 60}_{by_f // 60}")
                     if body_key not in last_alert_times or (now - last_alert_times[body_key]) >= zone_cooldown:
                         create_no_face_alert(cam, body_crop, frame, cursor, conn)
@@ -553,7 +566,7 @@ def process_camera(cam, matcher, last_alert_times, pending_alerts):
                 all_landmark_points = sum(len(p) for p in landmark.values())
                 if all_landmark_points < 10:
                     continue
-                required = ['left_eye', 'right_eye', 'nose_bridge', 'top_lip']
+                required = ['left_eye', 'right_eye']
                 if not all(k in landmark for k in required):
                     continue
 
