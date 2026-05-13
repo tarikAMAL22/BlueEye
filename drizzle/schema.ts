@@ -91,6 +91,7 @@ export const alerts = mysqlTable("alerts", {
   confidence: decimal("confidence", { precision: 5, scale: 2 }).notNull(),
   status: mysqlEnum("status", ["active", "acknowledged", "escalated", "dismissed"]).default("active").notNull(),
   threatLevel: mysqlEnum("threatLevel", ["low", "medium", "high", "critical"]).default("medium").notNull(),
+  detectionType: mysqlEnum("detectionType", ["FACE", "NO_FACE"]).default("FACE").notNull(),
   logs: json("logs").$type<{ timestamp: string; action: string; details?: string }[]>(),
   metadata: json("metadata"), // For multi-face detection and other extras
   timestamp: timestamp("timestamp").defaultNow().notNull(),
@@ -112,7 +113,7 @@ export const events = mysqlTable("events", {
   faceSnapshotUrl: varchar("faceSnapshotUrl", { length: 512 }),
   bestFrameSnapshotUrl: varchar("bestFrameSnapshotUrl", { length: 512 }),
   confidence: decimal("confidence", { precision: 5, scale: 2 }).notNull(),
-  eventType: mysqlEnum("eventType", ["recognition", "unknown", "alert", "identity_correction", "false_positive"]).default("recognition").notNull(),
+  eventType: mysqlEnum("eventType", ["recognition", "unknown", "alert", "identity_correction", "false_positive", "no_face"]).default("recognition").notNull(),
   payload: json("payload"),
   timestamp: timestamp("timestamp").defaultNow().notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -157,6 +158,36 @@ export const movements = mysqlTable("movements", {
 
 export type Movement = typeof movements.$inferSelect;
 export type InsertMovement = typeof movements.$inferInsert;
+
+/**
+ * CV Worker Config table: live-tunable detection sensitivity parameters.
+ * Append-only (ORDER BY id DESC LIMIT 1 = current config). Reload every 30s in cv_worker.
+ */
+export const cvWorkerConfig = mysqlTable("cv_worker_config", {
+  id: int("id").autoincrement().primaryKey(),
+
+  // ── Consecutive-detection cooldown ─────────────────────────────────────
+  alertCooldownSeconds:       int("alert_cooldown_seconds").notNull().default(30),
+  biometricMemorySeconds:     int("biometric_memory_seconds").notNull().default(45),
+  biometricDistanceThreshold: decimal("biometric_distance_threshold", { precision: 3, scale: 2 }).notNull().default("0.40"),
+
+  // ── Spatial tracker ─────────────────────────────────────────────────────
+  trackingRadiusPx: int("tracking_radius_px").notNull().default(100),
+
+  // ── Buffer / presence windows ───────────────────────────────────────────
+  detectionBufferSeconds: decimal("detection_buffer_seconds", { precision: 3, scale: 1 }).notNull().default("1.5"),
+  maxPresenceSeconds:     decimal("max_presence_seconds",     { precision: 4, scale: 1 }).notNull().default("8.0"),
+
+  // ── Frame analysis ──────────────────────────────────────────────────────
+  frameAnalysisIntervalMs: int("frame_analysis_interval_ms").notNull().default(150),
+  minFacePixels:           int("min_face_pixels").notNull().default(80),
+
+  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow(),
+  updatedBy: int("updated_by"),
+});
+
+export type CvWorkerConfig = typeof cvWorkerConfig.$inferSelect;
+export type InsertCvWorkerConfig = typeof cvWorkerConfig.$inferInsert;
 
 /**
  * Settings table: system-wide configuration

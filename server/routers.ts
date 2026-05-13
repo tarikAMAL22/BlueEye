@@ -630,6 +630,43 @@ export const appRouter = router({
       }),
   }),
 
+  // ============ CV WORKER CONFIG (ADMIN ONLY) ============
+  cvConfig: router({
+    get: adminProcedure.query(async () => {
+      return db.getCvWorkerConfig();
+    }),
+
+    update: adminProcedure
+      .input(z.object({
+        alertCooldownSeconds:       z.number().int().min(1).max(300),
+        biometricMemorySeconds:     z.number().int().min(0).max(300),
+        biometricDistanceThreshold: z.number().min(0.10).max(0.90),
+        trackingRadiusPx:           z.number().int().min(20).max(500),
+        detectionBufferSeconds:     z.number().min(0.5).max(10),
+        maxPresenceSeconds:         z.number().min(2).max(60),
+        frameAnalysisIntervalMs:    z.number().int().min(50).max(2000),
+        minFacePixels:              z.number().int().min(30).max(300),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await db.upsertCvWorkerConfig({
+          alertCooldownSeconds:       input.alertCooldownSeconds,
+          biometricMemorySeconds:     input.biometricMemorySeconds,
+          biometricDistanceThreshold: String(input.biometricDistanceThreshold) as any,
+          trackingRadiusPx:           input.trackingRadiusPx,
+          detectionBufferSeconds:     String(input.detectionBufferSeconds) as any,
+          maxPresenceSeconds:         String(input.maxPresenceSeconds) as any,
+          frameAnalysisIntervalMs:    input.frameAnalysisIntervalMs,
+          minFacePixels:              input.minFacePixels,
+        }, ctx.user.id);
+        return { success: true };
+      }),
+
+    reset: adminProcedure.mutation(async ({ ctx }) => {
+      await db.resetCvWorkerConfig(ctx.user.id);
+      return { success: true };
+    }),
+  }),
+
   movements: router({
     list: protectedProcedure
       .input(z.object({

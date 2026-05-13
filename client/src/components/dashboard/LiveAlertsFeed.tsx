@@ -26,9 +26,10 @@ export function LiveAlertsFeed({ selectedZoneId, onClearZone }: Props) {
   const [sortDesc, setSortDesc] = useState(true);
 
   const queryInput: Record<string, unknown> = {
-    limit: 40,
-    status: "active",
+    limit: 60,
   };
+  // "all" shows every status; other filters stay scoped to active alerts
+  if (filter !== "all") queryInput.status = "active";
   if (selectedZoneId) queryInput.zoneId = selectedZoneId;
   if (filter === "high") queryInput.threatLevel = "high";
   if (filter === "noface") queryInput.detectionType = "NO_FACE";
@@ -105,8 +106,8 @@ export function LiveAlertsFeed({ selectedZoneId, onClearZone }: Props) {
         </span>
       </div>
 
-      {/* Alert list */}
-      <div className="flex-1 overflow-y-auto px-3 pt-2 min-h-0">
+      {/* Alert grid */}
+      <div className="flex-1 overflow-y-auto px-3 pt-2 pb-2 min-h-0">
         {isLoading && displayed.length === 0 && (
           <div className="flex items-center justify-center h-24 text-[#64748B] text-[10px] font-mono">
             LOADING…
@@ -114,13 +115,15 @@ export function LiveAlertsFeed({ selectedZoneId, onClearZone }: Props) {
         )}
         {!isLoading && displayed.length === 0 && (
           <div className="flex items-center justify-center h-24 text-[#64748B] text-[10px] font-mono">
-            NO ACTIVE ALERTS
+            NO ALERTS
           </div>
         )}
         <AnimatePresence initial={false}>
-          {displayed.map((alert) => (
-            <AlertCard key={alert.id} alert={alert as any} />
-          ))}
+          <div className="grid grid-cols-2 gap-2">
+            {displayed.map((alert) => (
+              <AlertCard key={alert.id} alert={alert as any} />
+            ))}
+          </div>
         </AnimatePresence>
       </div>
 

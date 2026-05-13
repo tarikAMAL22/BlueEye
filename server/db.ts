@@ -1,6 +1,6 @@
 import { eq, desc, and, like, gte, lte, ne, isNotNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users, cameras, zones, persons, alerts, events, settings, accessRules, movements, Camera, Zone, Person, Alert, Event, Setting, InsertCamera, InsertZone, InsertPerson, InsertAlert, InsertEvent, InsertSetting, InsertAccessRule, Movement } from "../drizzle/schema";
+import { InsertUser, users, cameras, zones, persons, alerts, events, settings, accessRules, movements, cvWorkerConfig, Camera, Zone, Person, Alert, Event, Setting, InsertCamera, InsertZone, InsertPerson, InsertAlert, InsertEvent, InsertSetting, InsertAccessRule, Movement, CvWorkerConfig, InsertCvWorkerConfig } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -560,6 +560,39 @@ export async function updateAccessRule(id: number, data: Partial<InsertAccessRul
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   return db.update(accessRules).set(data).where(eq(accessRules.id, id));
+}
+
+// ============ CV WORKER CONFIG QUERIES ============
+
+const CV_CONFIG_DEFAULTS: Omit<InsertCvWorkerConfig, 'id' | 'updatedAt' | 'updatedBy'> = {
+  alertCooldownSeconds:       30,
+  biometricMemorySeconds:     45,
+  biometricDistanceThreshold: "0.40" as any,
+  trackingRadiusPx:           100,
+  detectionBufferSeconds:     "1.5" as any,
+  maxPresenceSeconds:         "8.0" as any,
+  frameAnalysisIntervalMs:    150,
+  minFacePixels:              80,
+};
+
+export async function getCvWorkerConfig(): Promise<CvWorkerConfig | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(cvWorkerConfig).orderBy(desc(cvWorkerConfig.id)).limit(1);
+  return rows[0] ?? null;
+}
+
+export async function upsertCvWorkerConfig(
+  data: Partial<Omit<InsertCvWorkerConfig, 'id' | 'updatedAt'>>,
+  updatedBy?: number,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.insert(cvWorkerConfig).values({ ...CV_CONFIG_DEFAULTS, ...data, updatedBy: updatedBy ?? null });
+}
+
+export async function resetCvWorkerConfig(updatedBy?: number): Promise<void> {
+  return upsertCvWorkerConfig(CV_CONFIG_DEFAULTS, updatedBy);
 }
 
 // ============ DASHBOARD EXTENDED QUERIES ============

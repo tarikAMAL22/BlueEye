@@ -8,9 +8,10 @@ import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { Slider } from "@/components/ui/slider";
 import {
   Shield, User, Loader2, Trash2, AlertTriangle, RefreshCcw,
-  Bomb, Bug, Scan, Cpu, Activity, Bell, Film, FolderOpen, CheckCircle2,
+  Bomb, Bug, Scan, Cpu, Activity, Bell, Film, FolderOpen, CheckCircle2, Zap,
 } from "lucide-react";
 
 // ─── Field helper ─────────────────────────────────────────────────────────────
@@ -377,6 +378,9 @@ export default function SystemSettings() {
         </CardContent>
       </Card>
 
+      {/* ── Detection Sensitivity ── */}
+      <DetectionSensitivityCard />
+
       {/* ── Notifications ── */}
       <Card className="glow-card bg-card/50 backdrop-blur">
         <CardHeader>
@@ -497,6 +501,227 @@ export default function SystemSettings() {
         </Button>
       </div>
     </div>
+  );
+}
+
+// ─── Detection Sensitivity ────────────────────────────────────────────────────
+
+function SliderField({
+  label, note, warn,
+  value, onChange,
+  min, max, step,
+  format,
+}: {
+  label: string; note?: string; warn?: string;
+  value: number; onChange: (v: number) => void;
+  min: number; max: number; step: number;
+  format?: (v: number) => string;
+}) {
+  const display = format ? format(value) : String(value);
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <Label className="text-sm font-medium">{label}</Label>
+        <span className="text-sm font-mono font-bold text-primary tabular-nums">{display}</span>
+      </div>
+      <Slider
+        value={[value]}
+        onValueChange={([v]) => onChange(v)}
+        min={min} max={max} step={step}
+        className="w-full"
+      />
+      <div className="flex justify-between text-[10px] text-muted-foreground">
+        <span>{format ? format(min) : min}</span>
+        {note && <span className="italic text-center px-2">{note}</span>}
+        <span>{format ? format(max) : max}</span>
+      </div>
+      {warn && (
+        <p className="text-[10px] text-amber-400 flex items-center gap-1">
+          <AlertTriangle className="w-3 h-3 shrink-0" />{warn}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function SensGroup({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-5">
+      <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/70">
+        {title}
+      </p>
+      {children}
+    </div>
+  );
+}
+
+function DetectionSensitivityCard() {
+  const { data: cfg, isLoading, refetch } = trpc.cvConfig.get.useQuery();
+  const updateMutation = trpc.cvConfig.update.useMutation();
+  const resetMutation  = trpc.cvConfig.reset.useMutation();
+
+  const [alertCooldown,      setAlertCooldown]      = useState(30);
+  const [bioMemory,          setBioMemory]           = useState(45);
+  const [bioThreshold,       setBioThreshold]        = useState(0.40);
+  const [trackRadius,        setTrackRadius]         = useState(100);
+  const [bufferSec,          setBufferSec]           = useState(1.5);
+  const [maxPresence,        setMaxPresence]         = useState(8.0);
+  const [analysisIntervalMs, setAnalysisIntervalMs]  = useState(150);
+  const [minFacePx,          setMinFacePx]           = useState(80);
+
+  useEffect(() => {
+    if (!cfg) return;
+    const f = parseFloat;
+    setAlertCooldown(cfg.alertCooldownSeconds);
+    setBioMemory(cfg.biometricMemorySeconds);
+    setBioThreshold(f(cfg.biometricDistanceThreshold as any));
+    setTrackRadius(cfg.trackingRadiusPx);
+    setBufferSec(f(cfg.detectionBufferSeconds as any));
+    setMaxPresence(f(cfg.maxPresenceSeconds as any));
+    setAnalysisIntervalMs(cfg.frameAnalysisIntervalMs);
+    setMinFacePx(cfg.minFacePixels);
+  }, [cfg]);
+
+  const handleSave = async () => {
+    try {
+      await updateMutation.mutateAsync({
+        alertCooldownSeconds:       alertCooldown,
+        biometricMemorySeconds:     bioMemory,
+        biometricDistanceThreshold: bioThreshold,
+        trackingRadiusPx:           trackRadius,
+        detectionBufferSeconds:     bufferSec,
+        maxPresenceSeconds:         maxPresence,
+        frameAnalysisIntervalMs:    analysisIntervalMs,
+        minFacePixels:              minFacePx,
+      });
+      toast.success("Sensitivity settings saved — apply within 30s");
+      refetch();
+    } catch (e) {
+      toast.error("Failed to save sensitivity settings");
+    }
+  };
+
+  const handleReset = async () => {
+    try {
+      await resetMutation.mutateAsync();
+      toast.success("Sensitivity reset to defaults");
+      refetch();
+    } catch (e) {
+      toast.error("Reset failed");
+    }
+  };
+
+  if (isLoading) return null;
+
+  const s = (v: number, unit: string) => `${v}${unit}`;
+
+  return (
+    <Card className="glow-card bg-card/50 backdrop-blur border-primary/20">
+      <CardHeader>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <Zap className="w-5 h-5 text-primary" />
+              Detection Sensitivity
+            </CardTitle>
+            <CardDescription>Changes apply within 30 seconds — no restart required</CardDescription>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleReset}
+            disabled={resetMutation.isPending}
+            className="shrink-0 text-muted-foreground"
+          >
+            {resetMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCcw className="w-3.5 h-3.5" />}
+            Reset Defaults
+          </Button>
+        </div>
+      </CardHeader>
+
+      <CardContent className="space-y-8">
+        <SensGroup title="Consecutive Detections">
+          <SliderField
+            label="Alert Cooldown"
+            value={alertCooldown} onChange={setAlertCooldown}
+            min={1} max={120} step={1}
+            format={v => s(v, "s")}
+            note="min time between alerts per camera"
+            warn={alertCooldown < 5 ? "Very low — high CPU & DB write load" : undefined}
+          />
+          <SliderField
+            label="Detection Buffer Window"
+            value={bufferSec} onChange={setBufferSec}
+            min={0.5} max={10} step={0.5}
+            format={v => s(v, "s")}
+            note="lower = faster alerts for quick passers"
+          />
+          <SliderField
+            label="Max Presence Window"
+            value={maxPresence} onChange={setMaxPresence}
+            min={2} max={60} step={1}
+            format={v => s(v, "s")}
+            note="force-finalize alert after this long even if still visible"
+          />
+        </SensGroup>
+
+        <SensGroup title="Person Tracking">
+          <SliderField
+            label="Tracking Radius"
+            value={trackRadius} onChange={setTrackRadius}
+            min={20} max={500} step={10}
+            format={v => s(v, "px")}
+            note="lower = two close persons = two separate alerts"
+            warn={trackRadius > 200 ? "High radius — nearby persons may merge into one tracker" : undefined}
+          />
+          <SliderField
+            label="Biometric Memory Window"
+            value={bioMemory} onChange={setBioMemory}
+            min={0} max={300} step={5}
+            format={v => v === 0 ? "off" : s(v, "s")}
+            note="0 = capture every single pass"
+          />
+          <SliderField
+            label="Biometric Distance Threshold"
+            value={bioThreshold} onChange={(v) => setBioThreshold(Math.round(v * 100) / 100)}
+            min={0.10} max={0.90} step={0.01}
+            format={v => v.toFixed(2)}
+            note="lower = stricter duplicate suppression"
+            warn={bioThreshold > 0.65 ? "High threshold — same person may trigger multiple alerts" : undefined}
+          />
+        </SensGroup>
+
+        <SensGroup title="Analysis Performance">
+          <SliderField
+            label="Frame Analysis Interval"
+            value={analysisIntervalMs} onChange={setAnalysisIntervalMs}
+            min={50} max={2000} step={50}
+            format={v => s(v, "ms")}
+            note="target interval between face_recognition calls"
+            warn={analysisIntervalMs < 100 ? "Very low — high CPU load" : undefined}
+          />
+          <SliderField
+            label="Minimum Face Size"
+            value={minFacePx} onChange={setMinFacePx}
+            min={30} max={300} step={10}
+            format={v => s(v, "px")}
+            note="crops smaller than this are ignored (person too far)"
+          />
+        </SensGroup>
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="outline" onClick={() => refetch()}>Discard</Button>
+          <Button
+            onClick={handleSave}
+            disabled={updateMutation.isPending}
+            className="bg-primary text-primary-foreground hover:bg-primary/90 gap-2"
+          >
+            {updateMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
+            Apply Sensitivity
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
