@@ -461,10 +461,37 @@ def process_camera(cam, matcher, last_alert_times, pending_alerts):
 
             # ── P2: HOG body detection gates face recognition ─────────────
             small_for_hog = cv2.resize(frame, (640, 360))
-            body_locations, _ = hog.detectMultiScale(
-                small_for_hog, winStride=(8, 8), padding=(4, 4),
-                scale=1.05, hitThreshold=0.5,
+            raw_locations, _ = hog.detectMultiScale(
+                small_for_hog,
+                winStride=(4, 4),    # finer stride catches smaller/background persons
+                padding=(8, 8),      # more padding helps partial detections
+                scale=1.03,          # finer pyramid catches small far-away persons
+                hitThreshold=0.0,    # accept all HOG responses; NMS filters duplicates
+                finalThreshold=0.0,
             )
+            # Manual NMS to merge overlapping boxes (replaces hitThreshold filtering)
+            if len(raw_locations) > 0:
+                rects = np.array([(x, y, x + w, y + h) for (x, y, w, h) in raw_locations])
+                pick  = []
+                x1, y1, x2, y2 = rects[:,0], rects[:,1], rects[:,2], rects[:,3]
+                area  = (x2 - x1 + 1) * (y2 - y1 + 1)
+                idxs  = np.argsort(y2)
+                while len(idxs) > 0:
+                    last = len(idxs) - 1
+                    i    = idxs[last]
+                    pick.append(i)
+                    xx1  = np.maximum(x1[i], x1[idxs[:last]])
+                    yy1  = np.maximum(y1[i], y1[idxs[:last]])
+                    xx2  = np.minimum(x2[i], x2[idxs[:last]])
+                    yy2  = np.minimum(y2[i], y2[idxs[:last]])
+                    w_   = np.maximum(0, xx2 - xx1 + 1)
+                    h_   = np.maximum(0, yy2 - yy1 + 1)
+                    overlap = (w_ * h_) / area[idxs[:last]]
+                    idxs = np.delete(idxs, np.concatenate(([last], np.where(overlap > 0.60)[0])))
+                rects = rects[pick]
+                body_locations = [(x, y, x2 - x, y2 - y) for (x, y, x2, y2) in rects]
+            else:
+                body_locations = []
             persons_detected = len(body_locations)
 
             face_locations      = []
@@ -474,7 +501,7 @@ def process_camera(cam, matcher, last_alert_times, pending_alerts):
                 small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
                 rgb_frame   = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
                 with cv_lock:
-                    face_locations = face_recognition.face_locations(rgb_frame)
+                    face_locations = face_recognition.face_locations(rgb_frame, number_of_times_to_upsample=2)
                 if face_locations and len(face_locations) < 10:
                     with face_lock:
                         face_encodings_list = face_recognition.face_encodings(rgb_frame, face_locations)
@@ -492,14 +519,13 @@ def process_camera(cam, matcher, last_alert_times, pending_alerts):
                 body_cx = bx_f + bw_f // 2
 
                 face_matched = False
-                body_cy = by_f + bh_f // 3  # face sits in the upper third of a body box
+                body_cy = by_f + bh_f // 4   # upper quarter — face sits near the top of a body box
                 for top_hf, right_hf, bottom_hf, left_hf in face_locations:
-                    # face_locations are in half-frame coords; multiply by 2 for full-frame:
-                    # center_x = ((left_hf + right_hf) / 2) * 2  = left_hf + right_hf
-                    # center_y = ((top_hf  + bottom_hf) / 2) * 2 = top_hf  + bottom_hf
                     face_cx_full = left_hf + right_hf
                     face_cy_full = top_hf  + bottom_hf
-                    if abs(face_cx_full - body_cx) < bw_f * 0.8 and abs(face_cy_full - body_cy) < bh_f * 0.6:
+                    tolerance_x  = max(80, bw_f * 0.8)
+                    tolerance_y  = max(120, bh_f * 0.5)
+                    if abs(face_cx_full - body_cx) < tolerance_x and abs(face_cy_full - body_cy) < tolerance_y:
                         face_matched = True
                         break
 
@@ -509,7 +535,7 @@ def process_camera(cam, matcher, last_alert_times, pending_alerts):
                         max(0, bx_f):min(frame.shape[1], bx_f + bw_f),
                     ]
                     # Spatial grid key prevents alert flooding for the same body position
-                    body_key = (cam_id, f"body_{bx_f // 120}_{by_f // 120}")
+                    body_key = (cam_id, f"body_{bx_f // 60}_{by_f // 60}")
                     if body_key not in last_alert_times or (now - last_alert_times[body_key]) >= zone_cooldown:
                         create_no_face_alert(cam, body_crop, frame, cursor, conn)
                         last_alert_times[body_key] = now
