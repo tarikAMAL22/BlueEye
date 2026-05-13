@@ -2,7 +2,7 @@ import { motion } from "framer-motion";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useToast } from "@/hooks/use-toast";
-import { CheckCircle, ArrowUpCircle, XCircle, User, Users, Camera, MapPin } from "lucide-react";
+import { CheckCircle, ArrowUpCircle, XCircle, User, Users, Camera, MapPin, EyeOff } from "lucide-react";
 
 const THREAT_BORDER: Record<string, string> = {
   low: "#10B981",
@@ -30,6 +30,8 @@ type AlertShape = {
   personId?: number | null;
   timestamp?: Date | string | null;
   metadata?: Record<string, unknown> | null;
+  detectionType?: string | null;
+  faceQuality?: string | null;
   person?: { name?: string | null; role?: string | null } | null;
 };
 
@@ -68,8 +70,11 @@ export function AlertCard({ alert, cameraName, zoneName }: Props) {
   const threat = alert.threatLevel ?? "low";
   const borderColor = THREAT_BORDER[threat] ?? THREAT_BORDER.low;
   const bgColor = THREAT_BG[threat] ?? THREAT_BG.low;
-  const confidence = Math.round(parseFloat(String(alert.confidence ?? "0")) * 100);
-  const isNoFace = (alert.metadata as any)?.bodyOnlyDetection === true;
+  const raw = parseFloat(String(alert.confidence ?? "0"));
+  // DB stores value already as percentage (e.g. 55.23 = 55.23%)
+  const confidence = Math.min(100, Math.round(raw));
+  const isNoFace = alert.detectionType === 'NO_FACE' || (alert.metadata as any)?.bodyOnlyDetection === true;
+  const isUnclear = !isNoFace && alert.faceQuality === 'UNCLEAR';
   const faceCount = (alert.metadata as any)?.faceCount as number | undefined;
   const isMulti = faceCount != null && faceCount > 1;
   const status = alert.status ?? "active";
@@ -137,6 +142,13 @@ export function AlertCard({ alert, cameraName, zoneName }: Props) {
           </div>
         )}
 
+        {/* UNCLEAR badge — top-right (blurry/weak face match) */}
+        {isUnclear && !isMulti && !isNoFace && (
+          <div className="absolute top-1.5 right-1.5 bg-amber-600/90 text-white text-[9px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1">
+            <EyeOff className="w-2.5 h-2.5" /> UNCLEAR
+          </div>
+        )}
+
         {/* Face crop — bottom-left */}
         {faceUrl && previewUrl && (
           <div className="absolute bottom-1.5 left-1.5 w-10 h-10 rounded border-2 border-white/40 overflow-hidden bg-black shadow-lg">
@@ -182,7 +194,7 @@ export function AlertCard({ alert, cameraName, zoneName }: Props) {
             <div
               className="h-full rounded-full transition-all"
               style={{
-                width: `${confidence}%`,
+                width: `${Math.min(100, confidence)}%`,
                 background: confidence > 70 ? "#22C55E" : confidence > 40 ? "#F59E0B" : "#EF4444",
               }}
             />

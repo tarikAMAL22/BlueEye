@@ -367,16 +367,26 @@ def _do_persist(job: PersistJob) -> None:
     if person_id is None:
         person_id    = db.insert_unknown_person(encoding.tolist(), photo_url=face_snap_url)
         threat_level = "high"
+        # Force immediate reload so this new unknown is recognised before
+        # the next detection cycle (avoids duplicate unknown person records)
+        face_engine.force_reload()
+
+    # Face quality — UNCLEAR when validator failed, crop is blurry, or match is weak
+    face_quality = 'UNCLEAR' if (not result.valid or tracker.best.sharpness < 80 or similarity < 0.45) else 'CLEAR'
 
     # Create alert
     alert_id = db.create_alert(
         camera_id=camera_id, zone_id=zone_id, person_id=person_id,
         threat_level=threat_level, confidence=round(similarity * 100, 2),
         face_snapshot_url=face_snap_url, best_frame_url=frame_snap_url,
+        detection_type='FACE',
+        face_quality=face_quality,
         metadata={
             "multiPersonFrame": multi_person,
             "faceCount":        face_count,
             "detectedFaceUrls": detected_face_urls,
+            "sharpness":        round(tracker.best.sharpness, 2),
+            "deepCheckPassed":  result.valid,
         },
     )
 
@@ -1077,6 +1087,7 @@ def _create_secondary_alerts(
             frame_count=tracker.frame_count,
             alert_id=None,
         )
+        sec_face_quality = 'CLEAR' if extra_sim >= 0.45 else 'UNCLEAR'
         sec_alert_id = db.create_alert(
             camera_id=camera_id,
             zone_id=zone_id,
@@ -1085,6 +1096,8 @@ def _create_secondary_alerts(
             confidence=round(extra_sim * 100, 2),
             face_snapshot_url=sec_face_url,
             best_frame_url=frame_snap_url,
+            detection_type='FACE',
+            face_quality=sec_face_quality,
             metadata={
                 "multiPersonFrame":   True,
                 "secondaryDetection": True,

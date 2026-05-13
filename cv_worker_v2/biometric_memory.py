@@ -43,7 +43,7 @@ class BiometricMemory:
         self,
         encoding: Encoding,
         person_id: Optional[int] = None,
-        tolerance: float = config.RECOGNITION_TOLERANCE,
+        tolerance: float = config.DEDUP_TOLERANCE,
         cooldown_sec: Optional[int] = None,
     ) -> bool:
         """
@@ -109,7 +109,16 @@ class BiometricMemory:
             return False
         cached_encodings = [e[0] for e in self._entries]
         distances = face_recognition.face_distance(cached_encodings, encoding)
-        return bool(np.any(distances <= tolerance))
+        match_idx = int(np.argmin(distances))
+        best_dist = float(distances[match_idx])
+        if best_dist <= tolerance:
+            matched_pid = self._entries[match_idx][2]
+            logger.debug(
+                "BiometricMemory: duplicate found — dist=%.3f <= tol=%.2f matched_person_id=%s",
+                best_dist, tolerance, matched_pid,
+            )
+            return True
+        return False
 
 
 # ── Module-level singleton ────────────────────────────────────────────────────

@@ -148,19 +148,23 @@ def create_alert(
     face_snapshot_url: str,
     best_frame_url: str,
     metadata: Optional[Dict[str, Any]] = None,
+    detection_type: str = 'FACE',
+    face_quality: str = 'CLEAR',
 ) -> int:
     """Insert a row into `alerts` and return the alert id."""
     sql = """
         INSERT INTO alerts
             (cameraId, zoneId, personId, threatLevel, confidence,
-             faceSnapshotUrl, bestFrameSnapshotUrl, status, metadata, createdAt)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             faceSnapshotUrl, bestFrameSnapshotUrl, status, metadata,
+             detectionType, faceQuality, createdAt)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """
     now = datetime.datetime.utcnow()
     payload = (
         camera_id, zone_id, person_id, threat_level, confidence,
         face_snapshot_url, best_frame_url, "active",
         json.dumps(metadata) if metadata else None,
+        detection_type, face_quality,
         now,
     )
     with get_connection() as conn:

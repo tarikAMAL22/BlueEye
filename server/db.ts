@@ -222,6 +222,8 @@ const SAFE_ALERT_COLS = {
   confidence:           alerts.confidence,
   status:               alerts.status,
   threatLevel:          alerts.threatLevel,
+  detectionType:        alerts.detectionType,
+  faceQuality:          alerts.faceQuality,
   logs:                 alerts.logs,
   metadata:             alerts.metadata,
   timestamp:            alerts.timestamp,
@@ -245,6 +247,7 @@ export async function getAlerts(filters: {
   endDate?: string;
   threatLevel?: string;
   detectionType?: 'FACE' | 'NO_FACE';
+  faceQuality?: 'CLEAR' | 'UNCLEAR' | 'NO_FACE';
 } = {}) {
   const db = await getDb();
   if (!db) return [];
@@ -278,10 +281,11 @@ export async function getAlerts(filters: {
   if (filters.threatLevel && filters.threatLevel !== 'all') {
     conditions.push(eq(alerts.threatLevel, filters.threatLevel as any));
   }
-  if (filters.detectionType === 'NO_FACE') {
-    conditions.push(sql`JSON_EXTRACT(${alerts.metadata}, '$.bodyOnlyDetection') = true`);
-  } else if (filters.detectionType === 'FACE') {
-    conditions.push(sql`(JSON_EXTRACT(${alerts.metadata}, '$.bodyOnlyDetection') IS NULL OR JSON_EXTRACT(${alerts.metadata}, '$.bodyOnlyDetection') != true)`);
+  if (filters.detectionType) {
+    conditions.push(eq(alerts.detectionType, filters.detectionType));
+  }
+  if (filters.faceQuality) {
+    conditions.push(eq(alerts.faceQuality, filters.faceQuality as any));
   }
   
   if (conditions.length > 0) {

@@ -212,8 +212,8 @@ def create_no_face_alert(cam, body_crop, full_frame, cursor, conn):
         cursor.execute("""
             INSERT INTO alerts
                 (personId, cameraId, zoneId, faceSnapshotUrl,
-                 bestFrameSnapshotUrl, confidence, status, threatLevel, detectionType)
-            VALUES (NULL, %s, %s, %s, %s, NULL, 'active', 'medium', 'NO_FACE')
+                 bestFrameSnapshotUrl, confidence, status, threatLevel, detectionType, faceQuality)
+            VALUES (NULL, %s, %s, %s, %s, NULL, 'active', 'medium', 'NO_FACE', 'NO_FACE')
         """, (cam_id, zone_id, body_url, frame_url))
         alert_id = cursor.lastrowid
 
@@ -281,8 +281,8 @@ def process_final_alert(cam, alert_data, cursor, conn):
             cursor.execute("""
                 INSERT INTO alerts
                     (personId, cameraId, zoneId, faceSnapshotUrl,
-                     bestFrameSnapshotUrl, confidence, status, threatLevel, detectionType, metadata)
-                VALUES (NULL, %s, %s, %s, %s, NULL, 'active', 'high', 'NO_FACE', %s)
+                     bestFrameSnapshotUrl, confidence, status, threatLevel, detectionType, faceQuality, metadata)
+                VALUES (NULL, %s, %s, %s, %s, NULL, 'active', 'high', 'NO_FACE', 'NO_FACE', %s)
             """, (cam_id, zone_id, face_url, frame_url, metadata))
             alert_id = cursor.lastrowid
             cursor.execute("""
@@ -328,8 +328,8 @@ def process_final_alert(cam, alert_data, cursor, conn):
         cursor.execute("""
             INSERT INTO alerts
                 (personId, cameraId, zoneId, faceSnapshotUrl,
-                 bestFrameSnapshotUrl, confidence, status, threatLevel, detectionType)
-            VALUES (%s, %s, %s, %s, %s, %s, 'active', %s, 'FACE')
+                 bestFrameSnapshotUrl, confidence, status, threatLevel, detectionType, faceQuality)
+            VALUES (%s, %s, %s, %s, %s, %s, 'active', %s, 'FACE', 'CLEAR')
         """, (person_id, cam_id, zone_id, face_url, frame_url, confidence, threat))
         alert_id = cursor.lastrowid
         cursor.execute("""

@@ -92,6 +92,7 @@ export const alerts = mysqlTable("alerts", {
   status: mysqlEnum("status", ["active", "acknowledged", "escalated", "dismissed"]).default("active").notNull(),
   threatLevel: mysqlEnum("threatLevel", ["low", "medium", "high", "critical"]).default("medium").notNull(),
   detectionType: mysqlEnum("detectionType", ["FACE", "NO_FACE"]).default("FACE").notNull(),
+  faceQuality: mysqlEnum("faceQuality", ["CLEAR", "UNCLEAR", "NO_FACE"]).default("CLEAR").notNull(),
   logs: json("logs").$type<{ timestamp: string; action: string; details?: string }[]>(),
   metadata: json("metadata"), // For multi-face detection and other extras
   timestamp: timestamp("timestamp").defaultNow().notNull(),

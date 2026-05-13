@@ -300,6 +300,7 @@ export const appRouter = router({
         endDate: z.string().optional(),
         threatLevel: z.string().optional(),
         detectionType: z.enum(['FACE', 'NO_FACE']).optional(),
+        faceQuality: z.enum(['CLEAR', 'UNCLEAR', 'NO_FACE']).optional(),
       }))
       .query(async ({ input }) => {
         return db.getAlerts(input);

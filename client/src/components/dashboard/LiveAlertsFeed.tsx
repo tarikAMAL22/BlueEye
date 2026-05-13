@@ -12,13 +12,14 @@ interface Props {
   onClearZone: () => void;
 }
 
-type Filter = "all" | "high" | "unknown" | "noface";
+type Filter = "all" | "high" | "unknown" | "noface" | "unclear";
 
 const FILTERS: { key: Filter; label: string }[] = [
   { key: "all", label: "ALL" },
   { key: "high", label: "HIGH+" },
   { key: "unknown", label: "UNKNOWN" },
   { key: "noface", label: "NO FACE" },
+  { key: "unclear", label: "UNCLEAR" },
 ];
 
 export function LiveAlertsFeed({ selectedZoneId, onClearZone }: Props) {
@@ -34,6 +35,7 @@ export function LiveAlertsFeed({ selectedZoneId, onClearZone }: Props) {
   if (selectedZoneId) queryInput.zoneId = selectedZoneId;
   if (filter === "high") queryInput.threatLevel = "high";
   if (filter === "noface") queryInput.detectionType = "NO_FACE";
+  if (filter === "unclear") queryInput.faceQuality = "UNCLEAR";
 
   const { data: alerts, isLoading } = trpc.alerts.list.useQuery(queryInput as any, {
     refetchInterval: autoRefresh ? 5000 : false,

@@ -173,6 +173,10 @@ class FaceEngine:
             raw = face_recognition.face_encodings(rgb_frame, locations)
         return [np.array(e, dtype=np.float64) for e in raw]
 
+    def force_reload(self) -> None:
+        """Force an immediate identity reload, bypassing the cache timer."""
+        self._load_identities()
+
 
 # ── Module-level singleton ────────────────────────────────────────────────────
 engine = FaceEngine()

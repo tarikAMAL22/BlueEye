@@ -29,7 +29,8 @@ DB_POOL_MAX  = int(os.getenv("DB_POOL_MAX", "10"))
 # ─── Face-recognition thresholds ─────────────────────────────────────────────
 LANDMARK_MIN_POINTS   = 10          # Minimum face landmark count (was 25 — killed small/distant faces)
 FACE_HEIGHT_MIN_PX    = 20          # Minimum bounding-box height (was 40 — background faces are 25-35px)
-RECOGNITION_TOLERANCE = 0.50        # face_recognition distance threshold
+RECOGNITION_TOLERANCE = 0.50        # face_recognition distance threshold — strict, for identifying known persons
+DEDUP_TOLERANCE       = 0.65        # looser threshold for biometric dedup — same person at different angles scores 0.45-0.65
 MERGE_TOLERANCE       = 0.10        # 1 - tolerance for 90 % similarity merge
 
 # ─── Scene buffer ─────────────────────────────────────────────────────────────
@@ -53,7 +54,7 @@ CV_FRAME_QUEUE_SIZE_DEFAULT  = 200  # Bounded frame queue — oldest evicted on 
 CV_DETECTION_WORKERS_DEFAULT = 2    # Parallel face-detection threads
 
 # ─── Identity reload ──────────────────────────────────────────────────────────
-IDENTITY_RELOAD_SEC   = 10          # Reload persons table every N seconds
+IDENTITY_RELOAD_SEC   = 3           # Reload persons table every N seconds (low enough to catch newly-created unknowns before next detection)
 CAMERA_RELOAD_SEC     = 30          # Reload cameras table every N seconds
 
 # ─── RTSP reconnection ────────────────────────────────────────────────────────
