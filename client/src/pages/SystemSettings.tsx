@@ -560,14 +560,14 @@ function DetectionSensitivityCard() {
   const updateMutation = trpc.cvConfig.update.useMutation();
   const resetMutation  = trpc.cvConfig.reset.useMutation();
 
-  const [alertCooldown,      setAlertCooldown]      = useState(30);
-  const [bioMemory,          setBioMemory]           = useState(45);
+  const [alertCooldown,      setAlertCooldown]      = useState(5);
+  const [bioMemory,          setBioMemory]           = useState(20);
   const [bioThreshold,       setBioThreshold]        = useState(0.40);
-  const [trackRadius,        setTrackRadius]         = useState(100);
-  const [bufferSec,          setBufferSec]           = useState(1.5);
+  const [trackRadius,        setTrackRadius]         = useState(80);
+  const [bufferSec,          setBufferSec]           = useState(1.0);
   const [maxPresence,        setMaxPresence]         = useState(8.0);
   const [analysisIntervalMs, setAnalysisIntervalMs]  = useState(150);
-  const [minFacePx,          setMinFacePx]           = useState(80);
+  const [minFacePx,          setMinFacePx]           = useState(50);
 
   useEffect(() => {
     if (!cfg) return;
@@ -706,6 +706,7 @@ function DetectionSensitivityCard() {
             min={30} max={300} step={10}
             format={v => s(v, "px")}
             note="crops smaller than this are ignored (person too far)"
+            warn={minFacePx > 55 ? "Values above 55px prevent detection of persons at distance. Recommended: 50px" : undefined}
           />
         </SensGroup>
 

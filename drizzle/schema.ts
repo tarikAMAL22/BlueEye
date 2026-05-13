@@ -174,20 +174,20 @@ export const cvWorkerConfig = mysqlTable("cv_worker_config", {
   id: int("id").autoincrement().primaryKey(),
 
   // ── Consecutive-detection cooldown ─────────────────────────────────────
-  alertCooldownSeconds:       int("alert_cooldown_seconds").notNull().default(30),
-  biometricMemorySeconds:     int("biometric_memory_seconds").notNull().default(45),
+  alertCooldownSeconds:       int("alert_cooldown_seconds").notNull().default(5),
+  biometricMemorySeconds:     int("biometric_memory_seconds").notNull().default(20),
   biometricDistanceThreshold: decimal("biometric_distance_threshold", { precision: 3, scale: 2 }).notNull().default("0.40"),
 
   // ── Spatial tracker ─────────────────────────────────────────────────────
-  trackingRadiusPx: int("tracking_radius_px").notNull().default(100),
+  trackingRadiusPx: int("tracking_radius_px").notNull().default(80),
 
   // ── Buffer / presence windows ───────────────────────────────────────────
-  detectionBufferSeconds: decimal("detection_buffer_seconds", { precision: 3, scale: 1 }).notNull().default("1.5"),
+  detectionBufferSeconds: decimal("detection_buffer_seconds", { precision: 3, scale: 1 }).notNull().default("1.0"),
   maxPresenceSeconds:     decimal("max_presence_seconds",     { precision: 4, scale: 1 }).notNull().default("8.0"),
 
   // ── Frame analysis ──────────────────────────────────────────────────────
   frameAnalysisIntervalMs: int("frame_analysis_interval_ms").notNull().default(150),
-  minFacePixels:           int("min_face_pixels").notNull().default(80),
+  minFacePixels:           int("min_face_pixels").notNull().default(50),
 
   updatedAt: timestamp("updated_at").defaultNow().onUpdateNow(),
   updatedBy: int("updated_by"),
