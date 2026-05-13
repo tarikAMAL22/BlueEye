@@ -33,14 +33,14 @@ hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
 
 # ── Detection sensitivity config (DB-backed, live-reloaded every 30s) ────────
 _cv_config = {
-    'alert_cooldown_seconds':       30,
-    'biometric_memory_seconds':     45,
+    'alert_cooldown_seconds':       5,    # was 30 — faster re-detection of follow-up persons
+    'biometric_memory_seconds':     20,   # was 45 — shorter dedup window
     'biometric_distance_threshold': 0.40,
-    'tracking_radius_px':           100,
-    'detection_buffer_seconds':     1.5,
+    'tracking_radius_px':           80,   # was 100 — tighter, prevents merging adjacent persons
+    'detection_buffer_seconds':     1.0,  # was 1.5 — faster finalization per person
     'max_presence_seconds':         8.0,
     'frame_analysis_interval_ms':   150,
-    'min_face_pixels':              80,
+    'min_face_pixels':              50,   # was 80 — catches background faces (65-75px crop)
 }
 _cv_config_lock = threading.Lock()
 
@@ -551,18 +551,21 @@ def process_camera(cam, matcher, last_alert_times, pending_alerts):
             for box, encoding, landmark in zip(face_locations, face_encodings_list, landmarks_list):
                 # Anatomy filter
                 all_landmark_points = sum(len(p) for p in landmark.values())
-                if all_landmark_points < 35:
+                if all_landmark_points < 10:
                     continue
                 required = ['left_eye', 'right_eye', 'nose_bridge', 'top_lip']
                 if not all(k in landmark for k in required):
                     continue
 
                 top, right, bottom, left = [b * 2 for b in box]
-                if (bottom - top) < 40:
+                if (bottom - top) < 20:
                     continue
 
                 person_id, confidence, role = matcher.match(encoding)
-                if confidence < 40:
+                # Do not gate on confidence — unknown persons legitimately score low
+                # against the DB (25-39%). Safety ensured by landmark + size filters
+                # above and is_valid_face_crop() before DB insert.
+                if np.all(encoding == 0):
                     continue
 
                 # Bug A: determine tracking_id BEFORE suppression checks
