@@ -1,17 +1,32 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Eye } from "lucide-react";
+import { Eye, Maximize2, Minimize2 } from "lucide-react";
 
 function formatTime(d: Date) {
   return d.toLocaleTimeString("fr-FR", { hour12: false });
 }
 
 export function TopBar() {
-  const [time, setTime] = useState(() => formatTime(new Date()));
+  const [time, setTime]           = useState(() => formatTime(new Date()));
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const { user } = useAuth();
+
+  const toggleFullscreen = useCallback(() => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen();
+    } else {
+      document.exitFullscreen();
+    }
+  }, []);
+
+  useEffect(() => {
+    const handler = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", handler);
+    return () => document.removeEventListener("fullscreenchange", handler);
+  }, []);
 
   const { data: status } = trpc.dashboard.systemStatus.useQuery(undefined, {
     refetchInterval: 10000,
@@ -95,6 +110,17 @@ export function TopBar() {
 
       {/* Spacer */}
       <div className="flex-1" />
+
+      {/* Fullscreen toggle */}
+      <button
+        onClick={toggleFullscreen}
+        title={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+        className="p-1.5 rounded hover:bg-[#1E293B] text-[#64748B] hover:text-[#00F5FF] transition-colors"
+      >
+        {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+      </button>
+
+      <Sep />
 
       {/* User */}
       <div className="flex items-center gap-2">

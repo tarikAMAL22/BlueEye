@@ -125,7 +125,7 @@ export function LiveAlertsFeed({ selectedZoneId, onClearZone }: Props) {
           </div>
         )}
         <AnimatePresence initial={false}>
-          <div className="grid grid-cols-2 xl:grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
             {displayed.map((alert) => (
               <AlertCard
                 key={alert.id}
