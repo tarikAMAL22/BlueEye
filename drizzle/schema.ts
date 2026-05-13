@@ -151,7 +151,14 @@ export const movements = mysqlTable("movements", {
   faceCropUrl:  varchar("faceCropUrl",  { length: 512 }),
   faceCount:    int("faceCount").notNull().default(0),
   frameCount:   int("frameCount").notNull().default(0),
-  alertId:      int("alertId"),
+  alertId:           int("alertId"),
+  suppressionReason: varchar("suppressionReason", { length: 32 }),
+  suppressionDetails: json("suppressionDetails").$type<{
+    secondsAgo?: number;
+    secondsRemaining?: number;
+    windowSeconds?: number;
+    cooldownSeconds?: number;
+  }>(),
   timestamp:    timestamp("timestamp").defaultNow().notNull(),
   createdAt:    timestamp("createdAt").defaultNow().notNull(),
 });

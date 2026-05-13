@@ -4,7 +4,7 @@ import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowLeft, Film, Users, AlertCircle, Play, Pause, SkipBack, SkipForward } from "lucide-react";
+import { ArrowLeft, Film, Users, AlertCircle, Play, Pause, SkipBack, SkipForward, Clock, RefreshCw, Settings } from "lucide-react";
 
 const FLIPBOOK_FPS = 8;
 
@@ -215,7 +215,7 @@ export default function MovementDetails() {
             </div>
           </div>
 
-          {/* Alert link */}
+          {/* Alert link / suppression info */}
           <div className="pt-2">
             {(movement as any).alertId ? (
               <WouterLink href={`/alerts/${(movement as any).alertId}`}>
@@ -224,11 +224,53 @@ export default function MovementDetails() {
                   View Alert #{(movement as any).alertId}
                 </Button>
               </WouterLink>
-            ) : (
-              <div className="p-4 rounded-xl bg-muted/20 border border-border/30 text-center text-xs text-muted-foreground italic">
-                No alert was generated for this movement (suppressed by cooldown or dedup).
-              </div>
-            )}
+            ) : (() => {
+              const reason   = (movement as any).suppressionReason as string | undefined;
+              const details  = (movement as any).suppressionDetails as any;
+              if (reason === 'cooldown') {
+                return (
+                  <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 space-y-2">
+                    <div className="flex items-center gap-2 text-amber-400 font-bold text-xs uppercase tracking-wide">
+                      <Clock className="w-4 h-4" /> Alert suppressed — camera cooldown active
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {details?.secondsRemaining != null
+                        ? `Cooldown had ${details.secondsRemaining}s remaining (setting: ${details.cooldownSeconds}s).`
+                        : `Alert cooldown was still active when this person was detected.`}
+                    </p>
+                    <WouterLink href="/settings">
+                      <Button variant="ghost" size="sm" className="h-7 px-2 text-[10px] text-amber-400 hover:bg-amber-500/10 gap-1.5">
+                        <Settings className="w-3 h-3" /> Adjust cooldown in Settings
+                      </Button>
+                    </WouterLink>
+                  </div>
+                );
+              }
+              if (reason === 'dedup') {
+                return (
+                  <div className="p-4 rounded-xl bg-blue-500/10 border border-blue-500/30 space-y-2">
+                    <div className="flex items-center gap-2 text-blue-400 font-bold text-xs uppercase tracking-wide">
+                      <RefreshCw className="w-4 h-4" /> Alert suppressed — person recently seen
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {details?.secondsAgo != null
+                        ? `Same biometric match detected ${details.secondsAgo}s ago (dedup window: ${details.windowSeconds}s).`
+                        : `This person was already detected within the dedup window.`}
+                    </p>
+                    <WouterLink href="/settings">
+                      <Button variant="ghost" size="sm" className="h-7 px-2 text-[10px] text-blue-400 hover:bg-blue-500/10 gap-1.5">
+                        <Settings className="w-3 h-3" /> Adjust dedup window in Settings
+                      </Button>
+                    </WouterLink>
+                  </div>
+                );
+              }
+              return (
+                <div className="p-4 rounded-xl bg-muted/20 border border-border/30 text-center text-xs text-muted-foreground italic">
+                  No alert was generated for this movement.
+                </div>
+              );
+            })()}
           </div>
         </div>
       </div>

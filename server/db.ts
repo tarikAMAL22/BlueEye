@@ -524,18 +524,49 @@ export async function getPotentialMatches(personId: number, customThreshold?: nu
 
 // ============ MOVEMENT QUERIES ============
 
-export async function getMovementById(id: number): Promise<Movement | undefined> {
+// Explicit column set — skips suppressionReason/suppressionDetails until DB migration runs.
+// Add those columns back after: ALTER TABLE movements ADD COLUMN suppressionReason VARCHAR(32) NULL,
+//   ADD COLUMN suppressionDetails JSON NULL;
+const SAFE_MOVEMENT_COLS = {
+  id:           movements.id,
+  cameraId:     movements.cameraId,
+  zoneId:       movements.zoneId,
+  trackerId:    movements.trackerId,
+  frameUrls:    movements.frameUrls,
+  bestFrameUrl: movements.bestFrameUrl,
+  faceCropUrl:  movements.faceCropUrl,
+  faceCount:    movements.faceCount,
+  frameCount:   movements.frameCount,
+  alertId:      movements.alertId,
+  timestamp:    movements.timestamp,
+  createdAt:    movements.createdAt,
+} as const;
+
+// After running the ALTER TABLE above, swap SAFE_MOVEMENT_COLS for movements (all columns).
+
+export async function getMovementById(id: number) {
   const db = await getDb();
   if (!db) return undefined;
-  const rows = await db.select().from(movements).where(eq(movements.id, id)).limit(1);
-  return rows[0];
+  // Try with new columns first; fall back to safe set if migration not yet applied
+  try {
+    const rows = await db.select().from(movements).where(eq(movements.id, id)).limit(1);
+    return rows[0];
+  } catch {
+    const rows = await db.select(SAFE_MOVEMENT_COLS).from(movements).where(eq(movements.id, id)).limit(1);
+    return rows[0];
+  }
 }
 
-export async function getMovementByAlertId(alertId: number): Promise<Movement | undefined> {
+export async function getMovementByAlertId(alertId: number) {
   const db = await getDb();
   if (!db) return undefined;
-  const rows = await db.select().from(movements).where(eq(movements.alertId, alertId)).limit(1);
-  return rows[0];
+  try {
+    const rows = await db.select().from(movements).where(eq(movements.alertId, alertId)).limit(1);
+    return rows[0];
+  } catch {
+    const rows = await db.select(SAFE_MOVEMENT_COLS).from(movements).where(eq(movements.alertId, alertId)).limit(1);
+    return rows[0];
+  }
 }
 
 export async function getMovements(filters: {
@@ -551,16 +582,23 @@ export async function getMovements(filters: {
 
   const limit = filters.limit ?? 100;
   const conditions = [];
-  if (filters.cameraId) conditions.push(eq(movements.cameraId, filters.cameraId));
-  if (filters.zoneId)   conditions.push(eq(movements.zoneId,   filters.zoneId));
-  if (filters.alertId)  conditions.push(eq(movements.alertId,  filters.alertId));
+  if (filters.cameraId)  conditions.push(eq(movements.cameraId,  filters.cameraId));
+  if (filters.zoneId)    conditions.push(eq(movements.zoneId,    filters.zoneId));
+  if (filters.alertId)   conditions.push(eq(movements.alertId,   filters.alertId));
   if (filters.startDate) conditions.push(gte(movements.timestamp, new Date(filters.startDate)));
   if (filters.endDate)   conditions.push(lte(movements.timestamp, new Date(filters.endDate)));
 
-  // @ts-ignore
-  let q = db.select().from(movements);
-  if (conditions.length > 0) q = (q as any).where(and(...conditions));
-  return (q as any).orderBy(desc(movements.timestamp)).limit(limit) as Promise<Movement[]>;
+  const buildQuery = (sel: any) => {
+    let q = db.select(sel).from(movements);
+    if (conditions.length > 0) q = (q as any).where(and(...conditions));
+    return (q as any).orderBy(desc(movements.timestamp)).limit(limit);
+  };
+
+  try {
+    return await buildQuery(movements) as any[];
+  } catch {
+    return await buildQuery(SAFE_MOVEMENT_COLS) as any[];
+  }
 }
 
 // ============ ACCESS RULES QUERIES ============

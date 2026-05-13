@@ -244,6 +244,7 @@ def process_final_alert(cam, alert_data, cursor, conn):
                      bestFrameSnapshotUrl, confidence, status, threatLevel, detectionType, metadata)
                 VALUES (NULL, %s, %s, %s, %s, NULL, 'active', 'high', 'NO_FACE', %s)
             """, (cam_id, zone_id, face_url, frame_url, metadata))
+            alert_id = cursor.lastrowid
             cursor.execute("""
                 INSERT INTO events
                     (personId, cameraId, zoneId, faceSnapshotUrl,
@@ -251,10 +252,11 @@ def process_final_alert(cam, alert_data, cursor, conn):
                 VALUES (NULL, %s, %s, %s, %s, NULL, 'no_face')
             """, (cam_id, zone_id, face_url, frame_url))
             conn.commit()
+            return alert_id
         except Exception as e:
             logger.error(f"DB Error (no-face alert): {e}")
             conn.rollback()
-        return
+            return None
 
     # Normal face-visible path
     if not person_id:
@@ -289,6 +291,7 @@ def process_final_alert(cam, alert_data, cursor, conn):
                  bestFrameSnapshotUrl, confidence, status, threatLevel, detectionType)
             VALUES (%s, %s, %s, %s, %s, %s, 'active', %s, 'FACE')
         """, (person_id, cam_id, zone_id, face_url, frame_url, confidence, threat))
+        alert_id = cursor.lastrowid
         cursor.execute("""
             INSERT INTO events
                 (personId, cameraId, zoneId, faceSnapshotUrl,
@@ -296,13 +299,66 @@ def process_final_alert(cam, alert_data, cursor, conn):
             VALUES (%s, %s, %s, %s, %s, %s, %s)
         """, (person_id, cam_id, zone_id, face_url, frame_url, confidence, event_type))
         conn.commit()
+        return alert_id
     except Exception as e:
         logger.error(f"DB Error: {e}")
         conn.rollback()
+        return None
+
+
+def create_movement_record(cam, tracker_data, alert_id, cursor, conn):
+    """Persist a movement record for every finalized tracker — alerted or suppressed."""
+    cam_id  = cam.get('id')
+    zone_id = cam.get('zoneId', 1)
+    tracker_id = str(tracker_data.get('tracker_id', 'unknown'))
+    best_frame_url = None
+    face_crop_url  = None
+
+    if tracker_data.get('full_frame') is not None:
+        uid   = str(uuid.uuid4())
+        fname = f"mov_frame_{uid}.jpg"
+        cv2.imwrite(os.path.join(UPLOAD_DIR, fname), tracker_data['full_frame'], [cv2.IMWRITE_JPEG_QUALITY, 85])
+        best_frame_url = f"/uploads/{fname}"
+
+    if tracker_data.get('face_image') is not None:
+        uid   = str(uuid.uuid4())
+        fname = f"mov_face_{uid}.jpg"
+        cv2.imwrite(os.path.join(UPLOAD_DIR, fname), tracker_data['face_image'], [cv2.IMWRITE_JPEG_QUALITY, 90])
+        face_crop_url = f"/uploads/{fname}"
+
+    suppression_reason  = tracker_data.get('suppression_reason')
+    suppression_details = json.dumps(tracker_data.get('suppression_details') or {})
+    face_count = tracker_data.get('face_count_seen', 1)
+    frame_urls = json.dumps([])
+
+    try:
+        cursor.execute("""
+            INSERT INTO movements
+                (cameraId, zoneId, trackerId, frameUrls, bestFrameUrl, faceCropUrl,
+                 faceCount, frameCount, alertId, suppressionReason, suppressionDetails)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (cam_id, zone_id, tracker_id, frame_urls, best_frame_url, face_crop_url,
+              face_count, 0, alert_id, suppression_reason, suppression_details))
+        conn.commit()
+    except Exception:
+        # Fallback for DBs without suppressionReason/suppressionDetails columns yet
+        conn.rollback()
+        try:
+            cursor.execute("""
+                INSERT INTO movements
+                    (cameraId, zoneId, trackerId, frameUrls, bestFrameUrl, faceCropUrl,
+                     faceCount, frameCount, alertId)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (cam_id, zone_id, tracker_id, frame_urls, best_frame_url, face_crop_url,
+                  face_count, 0, alert_id))
+            conn.commit()
+        except Exception as e2:
+            logger.error(f"Movement record save failed: {e2}")
+            conn.rollback()
 
 
 # Global memory for biometric cooldowns
-# Format: {'cam_id': [(encoding, timestamp), ...]}
+# Format: {(cam_id, tracking_id): last_alert_timestamp}  — per-tracker, not per-camera
 biometric_memory = {}
 biometric_memory_lock = threading.Lock()
 
@@ -446,13 +502,15 @@ def process_camera(cam, matcher, last_alert_times, pending_alerts):
                         last_alert_times[body_key] = now
 
             # ── Face recognition pipeline ──────────────────────────────────
-            bio_window    = get_config('biometric_memory_seconds')
-            bio_threshold = get_config('biometric_distance_threshold')
-            track_radius  = get_config('tracking_radius_px')
-            min_face_px   = get_config('min_face_pixels')
+            bio_window   = get_config('biometric_memory_seconds')
+            track_radius = get_config('tracking_radius_px')
+            min_face_px  = get_config('min_face_pixels')
+
+            # Bug B: prevent two faces in the same frame from sharing a tracker
+            assigned_in_frame = set()
 
             for box, encoding, landmark in zip(face_locations, face_encodings_list, landmarks_list):
-                # Anatomy filter: real face has ~68 landmark points
+                # Anatomy filter
                 all_landmark_points = sum(len(p) for p in landmark.values())
                 if all_landmark_points < 35:
                     continue
@@ -460,50 +518,24 @@ def process_camera(cam, matcher, last_alert_times, pending_alerts):
                 if not all(k in landmark for k in required):
                     continue
 
-                person_id, confidence, role = matcher.match(encoding)
-
-                # P4: Biometric cooldown with live-configurable window and threshold
-                now = time.time()
-                is_too_recent = False
-                with biometric_memory_lock:
-                    if cam_id in biometric_memory:
-                        biometric_memory[cam_id] = [
-                            m for m in biometric_memory[cam_id] if now - m[1] < bio_window
-                        ]
-                        recent_encodings = [m[0] for m in biometric_memory[cam_id]]
-                        if recent_encodings:
-                            distances = face_recognition.face_distance(recent_encodings, encoding)
-                            if any(d < bio_threshold for d in distances):
-                                is_too_recent = True
-                                logger.info(f"Biometric suppression triggered for camera {cam_id}")
-                if is_too_recent:
-                    continue
-
-                if confidence < 40:
-                    continue
-
                 top, right, bottom, left = [b * 2 for b in box]
                 if (bottom - top) < 40:
                     continue
 
-                # Face-visibility check via inter-ocular distance
-                face_width = right - left
-                face_visible = True
-                if 'left_eye' in landmark and 'right_eye' in landmark:
-                    le = np.mean(landmark['left_eye'], axis=0)
-                    re = np.mean(landmark['right_eye'], axis=0)
-                    eye_dist = float(np.linalg.norm(re - le)) * 2
-                    face_visible = eye_dist > face_width * 0.15
-                else:
-                    face_visible = False
+                person_id, confidence, role = matcher.match(encoding)
+                if confidence < 40:
+                    continue
 
-                # P3: Find nearest unknown tracker (not first), configurable radius
+                # Bug A: determine tracking_id BEFORE suppression checks
                 tracking_id = person_id
                 if not person_id:
                     best_tracker = None
                     best_dist    = float('inf')
                     for p_key, p_data in pending_alerts.items():
                         if p_key[0] == cam_id and str(p_key[1]).startswith("unk_"):
+                            # Bug B: skip trackers already assigned to another face this frame
+                            if p_key[1] in assigned_in_frame:
+                                continue
                             old_top, old_left = p_data.get('last_pos', (top, left))
                             d = ((top - old_top) ** 2 + (left - old_left) ** 2) ** 0.5
                             if d < track_radius and d < best_dist:
@@ -511,20 +543,77 @@ def process_camera(cam, matcher, last_alert_times, pending_alerts):
                                 best_tracker = p_key[1]
                     tracking_id = best_tracker if best_tracker else f"unk_{str(uuid.uuid4())[:8]}"
 
+                assigned_in_frame.add(tracking_id)
                 key = (cam_id, tracking_id)
                 now = time.time()
-                if key in last_alert_times and (now - last_alert_times[key]) < zone_cooldown:
-                    continue
 
+                # Bug A: biometric dedup keyed per tracker, not per camera
+                is_too_recent      = False
+                bio_last_seen_secs = None
+                with biometric_memory_lock:
+                    if key in biometric_memory:
+                        elapsed = now - biometric_memory[key]
+                        if elapsed < bio_window:
+                            is_too_recent      = True
+                            bio_last_seen_secs = round(elapsed, 1)
+                        else:
+                            del biometric_memory[key]
+
+                # Cooldown check per tracker
+                cooldown_remaining = 0.0
+                if key in last_alert_times:
+                    elapsed = now - last_alert_times[key]
+                    if elapsed < zone_cooldown:
+                        cooldown_remaining = round(zone_cooldown - elapsed, 1)
+
+                # Classify suppression for this specific tracker
+                suppression_reason: str | None  = None
+                suppression_details: dict        = {}
+                if is_too_recent:
+                    suppression_reason  = 'dedup'
+                    suppression_details = {'secondsAgo': bio_last_seen_secs, 'windowSeconds': bio_window}
+                    logger.info(f"Dedup: {cam.get('name')} tracker={tracking_id} seen {bio_last_seen_secs}s ago")
+                elif cooldown_remaining > 0:
+                    suppression_reason  = 'cooldown'
+                    suppression_details = {'secondsRemaining': cooldown_remaining, 'cooldownSeconds': zone_cooldown}
+                    logger.info(f"Cooldown: {cam.get('name')} tracker={tracking_id} — {cooldown_remaining}s left")
+
+                # Always register tracker so a movement record is saved even for suppressed persons
                 if key not in pending_alerts:
-                    pending_alerts[key] = {'start_time': now, 'best_size': 0, 'last_pos': (top, left)}
+                    pending_alerts[key] = {
+                        'start_time': now, 'best_size': 0, 'last_pos': (top, left),
+                        'tracker_id': str(tracking_id),
+                        'suppression_reason': suppression_reason,
+                        'suppression_details': suppression_details,
+                        'face_count_seen': 0,
+                    }
                 else:
                     pending_alerts[key]['last_pos'] = (top, left)
+                    if suppression_reason and not pending_alerts[key].get('suppression_reason'):
+                        pending_alerts[key]['suppression_reason'] = suppression_reason
+                        pending_alerts[key]['suppression_details'] = suppression_details
 
-                size = (bottom - top) * (right - left)
                 pending_alerts[key]['last_seen_time'] = now
+                pending_alerts[key]['face_count_seen'] = pending_alerts[key].get('face_count_seen', 0) + 1
+
+                if suppression_reason:
+                    continue  # Skip face crop; movement record still saved at finalization
+
+                # Face-visibility check via inter-ocular distance
+                face_width   = right - left
+                face_visible = True
+                if 'left_eye' in landmark and 'right_eye' in landmark:
+                    le           = np.mean(landmark['left_eye'], axis=0)
+                    re           = np.mean(landmark['right_eye'], axis=0)
+                    eye_dist     = float(np.linalg.norm(re - le)) * 2
+                    face_visible = eye_dist > face_width * 0.15
+                else:
+                    face_visible = False
+
+                # Update best face crop for this tracker
+                size = (bottom - top) * (right - left)
                 if size > pending_alerts[key]['best_size']:
-                    h, w = frame.shape[:2]
+                    h, w     = frame.shape[:2]
                     pad      = int((bottom - top) * 0.25)
                     s_top    = max(0, top    - pad)
                     s_bottom = min(h, bottom + pad)
@@ -537,8 +626,8 @@ def process_camera(cam, matcher, last_alert_times, pending_alerts):
                     if new_sharpness < pending_alerts[key].get('sharpness', 0) * 0.70:
                         continue
                     if face_img.shape[0] < 512:
-                        scale  = 512 / face_img.shape[0]
-                        new_w  = int(face_img.shape[1] * scale)
+                        scale    = 512 / face_img.shape[0]
+                        new_w    = int(face_img.shape[1] * scale)
                         face_img = cv2.resize(face_img, (new_w, 512), interpolation=cv2.INTER_LANCZOS4)
                     pending_alerts[key].update({
                         'best_size': size, 'sharpness': new_sharpness,
@@ -547,6 +636,9 @@ def process_camera(cam, matcher, last_alert_times, pending_alerts):
                         'confidence': confidence, 'role': role,
                         'face_visible': face_visible,
                     })
+                    # Clear suppression if the tracker later captures a real face
+                    pending_alerts[key]['suppression_reason']  = None
+                    pending_alerts[key]['suppression_details'] = {}
 
             # ── P5: Buffer window finalization ────────────────────────────
             min_window = get_config('detection_buffer_seconds')
@@ -557,13 +649,19 @@ def process_camera(cam, matcher, last_alert_times, pending_alerts):
                 time_since_last_seen = now - pending_alerts[k].get('last_seen_time', now)
 
                 if time_since_last_seen >= min_window or time_since_start >= max_window:
-                    if 'face_image' in pending_alerts[k]:
-                        process_final_alert(cam, pending_alerts[k], cursor, conn)
-                        last_alert_times[k] = now
-                        with biometric_memory_lock:
-                            if cam_id not in biometric_memory:
-                                biometric_memory[cam_id] = []
-                            biometric_memory[cam_id].append((pending_alerts[k]['face_encoding'], now))
+                    alert_id  = None
+                    suppressed = pending_alerts[k].get('suppression_reason')
+
+                    if not suppressed and 'face_image' in pending_alerts[k]:
+                        alert_id = process_final_alert(cam, pending_alerts[k], cursor, conn)
+                        if alert_id:
+                            last_alert_times[k] = now
+                            with biometric_memory_lock:
+                                # Bug A: per-tracker biometric memory (not per-camera)
+                                biometric_memory[k] = now
+
+                    # Save a movement record for every finalized tracker, suppressed or not
+                    create_movement_record(cam, pending_alerts[k], alert_id, cursor, conn)
                     del pending_alerts[k]
 
     except Exception as e:
