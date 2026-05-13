@@ -235,7 +235,11 @@ def _do_persist(job: PersistJob) -> None:
     h_full, w_full = tracker.best.full_frame.shape[:2]
     gray_full = cv2.cvtColor(tracker.best.full_frame, cv2.COLOR_BGR2GRAY)
     haar_raw = _haar.detectMultiScale(
-        gray_full, scaleFactor=1.1, minNeighbors=6, minSize=(50, 50),
+        gray_full,
+        scaleFactor=1.05,   # was 1.1 — finer pyramid catches small/distant faces
+        minNeighbors=3,     # was 6 — less strict, catches partially-visible faces
+        minSize=(30, 30),   # was (50,50) — background faces are ~30-40px
+        maxSize=(400, 400), # prevent full-frame false positives
     )
     # Deduplicate: remove overlapping / contained false-positive detections
     haar_faces = _nms_haar(list(haar_raw) if len(haar_raw) else [])
