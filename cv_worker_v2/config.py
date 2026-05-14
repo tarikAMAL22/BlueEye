@@ -34,9 +34,9 @@ DEDUP_TOLERANCE       = 0.65        # looser threshold for biometric dedup — s
 MERGE_TOLERANCE       = 0.10        # 1 - tolerance for 90 % similarity merge
 
 # ─── Scene buffer ─────────────────────────────────────────────────────────────
-SCENE_BUFFER_SEC      = 10.0        # Seconds to accumulate frames per subject
+SCENE_BUFFER_SEC      = 3.0         # Seconds to accumulate frames per subject
 INACTIVITY_TIMEOUT_SEC = 2.0        # Flush a tracker after N seconds without detection
-MIN_FRAME_COUNT       = 5           # Minimum detections required before persisting a tracker
+MIN_FRAME_COUNT       = 2           # Minimum detections required before persisting a tracker
 
 # ─── Tracking ────────────────────────────────────────────────────────────────
 SPATIAL_MERGE_PX      = 80          # Max centroid distance to merge trackers (was 100 — too wide for close persons)

@@ -40,8 +40,8 @@ class Validator:
     """
 
     # ── Tunable thresholds ────────────────────────────────────────────────────
-    BLUR_THRESHOLD        = 40.0    # Laplacian variance; lower = blurrier
-    SKIN_SAT_MIN          = 0.08    # Min average HSV saturation (0–1) for skin
+    BLUR_THRESHOLD        = 20.0    # Laplacian variance; lower = blurrier
+    SKIN_SAT_MIN          = 0.12    # Min average HSV saturation (0–1) for skin
     MIN_CROP_SIZE         = 48      # Minimum width/height of crop (px)
 
     def validate(self, crop_bgr: np.ndarray) -> ValidationResult:

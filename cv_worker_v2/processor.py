@@ -350,7 +350,7 @@ def _do_persist(job: PersistJob) -> None:
                 recent_enc = np.array(recent_enc_list, dtype=np.float64)
                 dedup_sim = face_engine.compare_encodings(encoding, recent_enc)
                 recog_tol = float(settings.get("cvRecognitionTolerance", config.RECOGNITION_TOLERANCE))
-                dedup_threshold = 1.0 - recog_tol   # e.g. 1 - 0.50 = 0.50
+                dedup_threshold = 1.0 - config.DEDUP_TOLERANCE  # e.g. 1 - 0.65 = 0.35
                 if dedup_sim >= dedup_threshold:
                     logger.info(
                         "[cam-%d] tracker=%s DEDUP — same face as last camera alert (sim=%.3f >= %.3f, window=%.1fs) — movement #%d logged, alert suppressed",
@@ -364,6 +364,7 @@ def _do_persist(job: PersistJob) -> None:
         )
 
     # Auto-register unknown
+    was_unknown = (person_id is None)
     if person_id is None:
         person_id    = db.insert_unknown_person(encoding.tolist(), photo_url=face_snap_url)
         threat_level = "high"
@@ -371,8 +372,10 @@ def _do_persist(job: PersistJob) -> None:
         # the next detection cycle (avoids duplicate unknown person records)
         face_engine.force_reload()
 
-    # Face quality — UNCLEAR when validator failed, crop is blurry, or match is weak
-    face_quality = 'UNCLEAR' if (not result.valid or tracker.best.sharpness < 80 or similarity < 0.45) else 'CLEAR'
+    # Face quality — UNCLEAR when validator failed or crop is too blurry
+    # sharpness < 80 was too strict (normal faces score 50-150); 30 rejects only real artifacts
+    # similarity < 0.45 removed: unknowns always have similarity=0 → incorrectly tagged UNCLEAR
+    face_quality = 'UNCLEAR' if (not result.valid or tracker.best.sharpness < 30) else 'CLEAR'
 
     # Create alert
     alert_id = db.create_alert(
@@ -411,7 +414,7 @@ def _do_persist(job: PersistJob) -> None:
     db.create_event(
         camera_id=camera_id, zone_id=zone_id, person_id=person_id,
         alert_id=alert_id, confidence=round(similarity * 100, 2),
-        event_type="recognition",
+        event_type="unknown" if was_unknown else "recognition",
         payload={
             "trackerID":       tracker.tracker_id,
             "frameCount":      tracker.frame_count,
@@ -879,6 +882,21 @@ def _update_best_frame(
 ) -> None:
     if crop.size == 0:
         return
+
+    # Reject corrupt crops (BGR/RGB channel inversion)
+    if not _is_bgr_sane(crop):
+        return
+
+    # Reject glass/light reflections — they have high Laplacian variance (sharp edges)
+    # and would win the composite score over real faces.
+    # Real skin: sat_mean 0.15–0.40; glass/light: 0.03–0.10
+    hsv      = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+    sat_mean = float(hsv[:, :, 1].mean()) / 255.0
+    if sat_mean < 0.12:
+        # Accept only if we have no best frame yet (placeholder rather than artifact)
+        if tracker.best.crop_bgr is not None:
+            return
+
     top, right, bottom, left = location
     area  = float((bottom - top) * (right - left))
     gray  = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
