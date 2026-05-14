@@ -10,6 +10,7 @@ import uuid
 from contextlib import contextmanager
 from typing import Optional, List, Dict, Any
 
+import numpy as np
 import pymysql                           # sync fallback / pool init
 from dbutils.pooled_db import PooledDB  # connection pooling (DBUtils)
 
@@ -320,6 +321,52 @@ def get_recent_alert_encoding(camera_id: int, window_sec: float) -> Optional[Lis
         return enc if enc else None  # treat [] (body-only) as no encoding
     except (json.JSONDecodeError, TypeError):
         return None
+
+
+def find_similar_unknown_person(
+    encoding: list,
+    max_distance: float = 0.65,
+    window_sec: float = 120,
+) -> Optional[int]:
+    """
+    Search for an existing unknown person inserted within window_sec whose
+    faceEncoding is within max_distance of the given encoding.
+    Prevents race-condition duplicates when parallel detection workers both
+    see person_id=None and attempt to insert the same unknown person.
+    """
+    sql = """
+        SELECT id, faceEncoding
+        FROM persons
+        WHERE role = 'UNKNOWN'
+          AND createdAt >= NOW() - INTERVAL %s SECOND
+          AND faceEncoding IS NOT NULL
+          AND faceEncoding != '[]'
+        ORDER BY createdAt DESC
+        LIMIT 20
+    """
+    with get_connection() as conn:
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            cur.execute(sql, (window_sec,))
+            rows = cur.fetchall()
+    if not rows:
+        return None
+
+    enc_np = np.array(encoding, dtype=np.float64)
+    for row in rows:
+        try:
+            db_enc = np.array(json.loads(row["faceEncoding"]), dtype=np.float64)
+            if db_enc.shape != enc_np.shape:
+                continue
+            dist = float(np.linalg.norm(enc_np - db_enc))
+            if dist <= max_distance:
+                logger.debug(
+                    "find_similar_unknown: matched person_id=%d dist=%.3f",
+                    row["id"], dist,
+                )
+                return int(row["id"])
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+    return None
 
 
 def was_person_alerted_recently(person_id: int, camera_id: int, window_sec: float) -> bool:

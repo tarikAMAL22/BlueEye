@@ -243,8 +243,22 @@ def _do_persist(job: PersistJob) -> None:
     )
     # Deduplicate: remove overlapping / contained false-positive detections
     haar_faces = _nms_haar(list(haar_raw) if len(haar_raw) else [])
-    face_count  = len(haar_faces)
-    multi_person = face_count > 1
+    haar_count = len(haar_faces)
+
+    # face_count is at least 1 — dlib already confirmed this tracker's face.
+    # Prevents NO FACE banner when Haar misses tilted/bottom-up faces that dlib caught.
+    face_count = max(1, haar_count)
+
+    # multi_person only when Haar finds secondary faces that don't overlap
+    # the primary tracked location — avoids false positives on textured backgrounds.
+    if haar_count > 1 and tracker.best.location:
+        non_primary_count = sum(
+            1 for (hx, hy, hw, hh) in haar_faces
+            if _iou((hy, hx + hw, hy + hh, hx), tracker.best.location) < 0.10
+        )
+        multi_person = non_primary_count > 0
+    else:
+        multi_person = False
 
     # Re-crop face snapshot using the Haar detection that best overlaps the tracked location.
     # Haar gives a tight frontal-face bbox → correct framing, no body bleed-in.
@@ -280,8 +294,31 @@ def _do_persist(job: PersistJob) -> None:
             face_snap_url = _save_image(tracker.best.crop_bgr, prefix="face")
             logger.debug("[cam-%d] tracker=%s face_snap Haar crop empty/corrupt → HOG fallback", camera_id, tracker.tracker_id)
     else:
-        face_snap_url = _save_image(tracker.best.crop_bgr, prefix="face")
-        logger.debug("[cam-%d] tracker=%s face_snap no Haar match → HOG fallback", camera_id, tracker.tracker_id)
+        # Haar missed this face (tilted/bottom-up angle) → re-crop from full_frame
+        # using the best dlib location. tracker.best.crop_bgr may be from an early
+        # frame where the person was entering the scene (body visible, head out-of-frame).
+        if tracker.best.location and tracker.best.full_frame is not None:
+            ft, fr, fb, fl = tracker.best.location
+            h_f, w_f = tracker.best.full_frame.shape[:2]
+            pad = int(max(fb - ft, fr - fl) * 0.25)
+            lx1 = max(0, fl - pad)
+            ly1 = max(0, ft - pad)
+            lx2 = min(w_f, fr + pad)
+            ly2 = min(h_f, fb + pad)
+            loc_crop = tracker.best.full_frame[ly1:ly2, lx1:lx2]
+            if (loc_crop.size > 0
+                    and _is_bgr_sane(loc_crop)
+                    and loc_crop.shape[0] >= 20
+                    and loc_crop.shape[1] >= 20):
+                face_snap_url = _save_image(loc_crop, prefix="face")
+            else:
+                face_snap_url = _save_image(tracker.best.crop_bgr, prefix="face")
+        else:
+            face_snap_url = _save_image(tracker.best.crop_bgr, prefix="face")
+        logger.debug(
+            "[cam-%d] tracker=%s face_snap no Haar match → dlib-location fallback",
+            camera_id, tracker.tracker_id,
+        )
 
     if not _is_bgr_sane(tracker.best.crop_bgr):
         logger.error(
@@ -369,11 +406,29 @@ def _do_persist(job: PersistJob) -> None:
     # Auto-register unknown
     was_unknown = (person_id is None)
     if person_id is None:
-        person_id    = db.insert_unknown_person(encoding.tolist(), photo_url=face_snap_url)
+        # Check if a parallel worker already inserted a similar unknown in the last window
+        # (race: both workers see person_id=None at t=0 and t=0.1s → two unknown rows)
+        dedup_win = float(settings.get("cvCameraDedupWindowSec", config.CAMERA_DEDUP_WINDOW_SEC))
+        existing_pid = db.find_similar_unknown_person(
+            encoding.tolist(),
+            max_distance=config.DEDUP_TOLERANCE,
+            window_sec=dedup_win,
+        )
+        if existing_pid is not None:
+            person_id = existing_pid
+            logger.info(
+                "[cam-%d] tracker=%s reused existing unknown person_id=%d "
+                "(parallel worker race condition prevented)",
+                camera_id, tracker.tracker_id, person_id,
+            )
+        else:
+            person_id = db.insert_unknown_person(encoding.tolist(), photo_url=face_snap_url)
+            logger.info(
+                "[cam-%d] tracker=%s new unknown person_id=%d created",
+                camera_id, tracker.tracker_id, person_id,
+            )
+            face_engine.force_reload()
         threat_level = "high"
-        # Force immediate reload so this new unknown is recognised before
-        # the next detection cycle (avoids duplicate unknown person records)
-        face_engine.force_reload()
 
     # Person-ID dedup (primary gate) — permanent in DB, works even after bio_memory expires.
     # bio_memory is encoding-based and expires after cooldown_sec; person_id never expires.
