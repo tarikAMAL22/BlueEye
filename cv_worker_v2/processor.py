@@ -76,6 +76,20 @@ FRAME_QUEUE_MAXSIZE   = config.CV_FRAME_QUEUE_SIZE_DEFAULT
 DETECTION_WORKERS     = config.CV_DETECTION_WORKERS_DEFAULT
 PERSIST_QUEUE_MAXSIZE = 0  # unbounded — never lose a finalized subject
 
+# Per-(person_id, camera_id) locks — serialise alert creation to prevent
+# parallel workers from both passing was_person_alerted_recently() before
+# either has committed its INSERT.
+_alert_create_locks: dict = {}
+_alert_create_locks_mutex = threading.Lock()
+
+
+def _get_alert_lock(person_id: int, camera_id: int) -> threading.Lock:
+    key = (person_id, camera_id)
+    with _alert_create_locks_mutex:
+        if key not in _alert_create_locks:
+            _alert_create_locks[key] = threading.Lock()
+        return _alert_create_locks[key]
+
 
 # ─── Shared data structures ───────────────────────────────────────────────────
 
@@ -237,7 +251,7 @@ def _do_persist(job: PersistJob) -> None:
     haar_raw = _haar.detectMultiScale(
         gray_full,
         scaleFactor=1.05,   # was 1.1 — finer pyramid catches small/distant faces
-        minNeighbors=3,     # was 6 — less strict, catches partially-visible faces
+        minNeighbors=5,     # 3 generated FP on textured backgrounds (windows, screens); 5 keeps real faces
         minSize=(30, 30),   # was (50,50) — background faces are ~30-40px
         maxSize=(400, 400), # prevent full-frame false positives
     )
@@ -306,11 +320,21 @@ def _do_persist(job: PersistJob) -> None:
             lx2 = min(w_f, fr + pad)
             ly2 = min(h_f, fb + pad)
             loc_crop = tracker.best.full_frame[ly1:ly2, lx1:lx2]
-            if (loc_crop.size > 0
-                    and _is_bgr_sane(loc_crop)
-                    and loc_crop.shape[0] >= 20
-                    and loc_crop.shape[1] >= 20):
-                face_snap_url = _save_image(loc_crop, prefix="face")
+            if loc_crop.size > 0 and loc_crop.shape[0] >= 20 and loc_crop.shape[1] >= 20:
+                hsv_loc  = cv2.cvtColor(loc_crop, cv2.COLOR_BGR2HSV)
+                sat_loc  = float(hsv_loc[:, :, 1].mean()) / 255.0
+                if _is_bgr_sane(loc_crop) and sat_loc >= 0.12:
+                    face_snap_url = _save_image(loc_crop, prefix="face")
+                    logger.debug(
+                        "[cam-%d] tracker=%s dlib-loc crop OK sat=%.3f",
+                        camera_id, tracker.tracker_id, sat_loc,
+                    )
+                else:
+                    logger.warning(
+                        "[cam-%d] tracker=%s dlib-loc crop rejected (sat=%.3f) — HOG fallback",
+                        camera_id, tracker.tracker_id, sat_loc,
+                    )
+                    face_snap_url = _save_image(tracker.best.crop_bgr, prefix="face")
             else:
                 face_snap_url = _save_image(tracker.best.crop_bgr, prefix="face")
         else:
@@ -447,21 +471,34 @@ def _do_persist(job: PersistJob) -> None:
     # similarity < 0.45 removed: unknowns always have similarity=0 → incorrectly tagged UNCLEAR
     face_quality = 'UNCLEAR' if (not result.valid or tracker.best.sharpness < 30) else 'CLEAR'
 
-    # Create alert
-    alert_id = db.create_alert(
-        camera_id=camera_id, zone_id=zone_id, person_id=person_id,
-        threat_level=threat_level, confidence=round(similarity * 100, 2),
-        face_snapshot_url=face_snap_url, best_frame_url=frame_snap_url,
-        detection_type='FACE',
-        face_quality=face_quality,
-        metadata={
-            "multiPersonFrame": multi_person,
-            "faceCount":        face_count,
-            "detectedFaceUrls": detected_face_urls,
-            "sharpness":        round(tracker.best.sharpness, 2),
-            "deepCheckPassed":  result.valid,
-        },
-    )
+    # Serialise alert creation per (person_id, camera_id) to prevent race conditions
+    # between parallel detection workers: both may pass was_person_alerted_recently()
+    # before either commits its INSERT. The double-check inside the lock is the real gate.
+    alert_lock = _get_alert_lock(person_id, camera_id)
+    with alert_lock:
+        dedup_win_final = float(settings.get("cvCameraDedupWindowSec", config.CAMERA_DEDUP_WINDOW_SEC))
+        if not is_blacklisted and db.was_person_alerted_recently(person_id, camera_id, dedup_win_final):
+            logger.info(
+                "[cam-%d] tracker=%s DEDUP (inside lock) — person=%d already alerted within %.0fs — suppressed",
+                camera_id, tracker.tracker_id, person_id, dedup_win_final,
+            )
+            return
+
+        # Create alert
+        alert_id = db.create_alert(
+            camera_id=camera_id, zone_id=zone_id, person_id=person_id,
+            threat_level=threat_level, confidence=round(similarity * 100, 2),
+            face_snapshot_url=face_snap_url, best_frame_url=frame_snap_url,
+            detection_type='FACE',
+            face_quality=face_quality,
+            metadata={
+                "multiPersonFrame": multi_person,
+                "faceCount":        face_count,
+                "detectedFaceUrls": detected_face_urls,
+                "sharpness":        round(tracker.best.sharpness, 2),
+                "deepCheckPassed":  result.valid,
+            },
+        )
 
     # Link alert back to movement record
     db.link_movement_to_alert(movement_id, alert_id)
