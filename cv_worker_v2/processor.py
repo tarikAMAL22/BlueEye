@@ -342,21 +342,24 @@ def _do_persist(job: PersistJob) -> None:
             )
             return
 
-        # Camera-level dedup: compare 1-to-1 against the last alert on this camera.
+        # Camera-level encoding dedup: check against ALL recent alerts (not just LIMIT 1).
+        # This catches parallel-worker races where 2 alerts land simultaneously.
         dedup_window = float(settings.get("cvCameraDedupWindowSec", config.CAMERA_DEDUP_WINDOW_SEC))
         if dedup_window > 0:
-            recent_enc_list = db.get_recent_alert_encoding(camera_id, dedup_window)
-            if recent_enc_list is not None:
-                recent_enc = np.array(recent_enc_list, dtype=np.float64)
-                dedup_sim = face_engine.compare_encodings(encoding, recent_enc)
-                recog_tol = float(settings.get("cvRecognitionTolerance", config.RECOGNITION_TOLERANCE))
-                dedup_threshold = 1.0 - config.DEDUP_TOLERANCE  # e.g. 1 - 0.65 = 0.35
-                if dedup_sim >= dedup_threshold:
-                    logger.info(
-                        "[cam-%d] tracker=%s DEDUP — same face as last camera alert (sim=%.3f >= %.3f, window=%.1fs) — movement #%d logged, alert suppressed",
-                        camera_id, tracker.tracker_id, dedup_sim, dedup_threshold, dedup_window, movement_id,
-                    )
-                    return
+            recent_encs = db.get_recent_alert_encodings(camera_id, dedup_window)
+            if recent_encs:
+                sim_threshold = 1.0 - config.DEDUP_TOLERANCE  # 0.35
+                for recent_enc_list in recent_encs:
+                    recent_enc = np.array(recent_enc_list, dtype=np.float64)
+                    sim = face_engine.compare_encodings(encoding, recent_enc)
+                    if sim >= sim_threshold:
+                        logger.info(
+                            "[cam-%d] tracker=%s ENCODING DEDUP — similar face in last %.0fs "
+                            "(sim=%.3f >= %.3f) — movement #%d logged, alert suppressed",
+                            camera_id, tracker.tracker_id, dedup_window,
+                            sim, sim_threshold, movement_id,
+                        )
+                        return
     else:
         logger.info(
             "[cam-%d] tracker=%s BLACKLISTED — bypassing cooldown/dedup, forcing critical alert",
@@ -371,6 +374,18 @@ def _do_persist(job: PersistJob) -> None:
         # Force immediate reload so this new unknown is recognised before
         # the next detection cycle (avoids duplicate unknown person records)
         face_engine.force_reload()
+
+    # Person-ID dedup (primary gate) — permanent in DB, works even after bio_memory expires.
+    # bio_memory is encoding-based and expires after cooldown_sec; person_id never expires.
+    # Checked after insert_unknown_person so person_id is always set at this point.
+    if not is_blacklisted:
+        dedup_window_pid = float(settings.get("cvCameraDedupWindowSec", config.CAMERA_DEDUP_WINDOW_SEC))
+        if db.was_person_alerted_recently(person_id, camera_id, dedup_window_pid):
+            logger.info(
+                "[cam-%d] tracker=%s PERSON_ID DEDUP — person=%d already alerted within %.0fs — movement #%d logged",
+                camera_id, tracker.tracker_id, person_id, dedup_window_pid, movement_id,
+            )
+            return
 
     # Face quality — UNCLEAR when validator failed or crop is too blurry
     # sharpness < 80 was too strict (normal faces score 50-150); 30 rejects only real artifacts

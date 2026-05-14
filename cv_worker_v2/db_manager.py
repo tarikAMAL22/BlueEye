@@ -322,6 +322,58 @@ def get_recent_alert_encoding(camera_id: int, window_sec: float) -> Optional[Lis
         return None
 
 
+def was_person_alerted_recently(person_id: int, camera_id: int, window_sec: float) -> bool:
+    """
+    Return True if person_id already has a non-dismissed alert on this camera
+    within the last window_sec seconds.
+    Primary dedup gate — person_id based, permanent in DB, works after bio_memory expires.
+    """
+    sql = """
+        SELECT COUNT(*) AS cnt
+        FROM alerts
+        WHERE personId  = %s
+          AND cameraId  = %s
+          AND createdAt >= NOW() - INTERVAL %s SECOND
+          AND status != 'dismissed'
+    """
+    with get_connection() as conn:
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            cur.execute(sql, (person_id, camera_id, window_sec))
+            row = cur.fetchone()
+    return bool(row["cnt"] > 0) if row else False
+
+
+def get_recent_alert_encodings(camera_id: int, window_sec: float) -> List[List[float]]:
+    """
+    Return ALL face encodings from recent alerts on this camera within window_sec.
+    Encoding-based dedup fallback (covers race conditions where person_id not yet set).
+    Replaces the LIMIT 1 version — now checks up to 20 recent alerts.
+    """
+    sql = """
+        SELECT p.faceEncoding
+        FROM alerts a
+        JOIN persons p ON p.id = a.personId
+        WHERE a.cameraId = %s
+          AND a.createdAt >= NOW() - INTERVAL %s SECOND
+          AND p.faceEncoding IS NOT NULL
+        ORDER BY a.createdAt DESC
+        LIMIT 20
+    """
+    with get_connection() as conn:
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            cur.execute(sql, (camera_id, window_sec))
+            rows = cur.fetchall()
+    result = []
+    for row in rows:
+        try:
+            enc = json.loads(row["faceEncoding"])
+            if enc:
+                result.append(enc)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return result
+
+
 def log_false_positive(camera_id: int, reason: str) -> None:
     """Record a deep-check rejection in the events table."""
     sql = """

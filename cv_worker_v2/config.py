@@ -46,8 +46,8 @@ SPATIAL_BIOMETRIC_SIM = 0.30        # Looser similarity floor for spatial+biomet
                                     #  different people score <0.20 even when spatially close)
 
 # ─── Biometric memory (cooldown) ──────────────────────────────────────────────
-ALERT_COOLDOWN_SEC    = 30          # Seconds before the same encoding can re-alert (covers full video loop 15-60s)
-CAMERA_DEDUP_WINDOW_SEC = 30        # Skip alert if same face seen on same camera within this window (aligned with cooldown)
+ALERT_COOLDOWN_SEC    = 120         # Seconds before the same encoding can re-alert (covers video loops up to 120s)
+CAMERA_DEDUP_WINDOW_SEC = 120       # Skip alert if same face seen on same camera within this window (aligned with cooldown)
 
 # ─── CV pipeline worker defaults (overridden by DB settings at runtime) ───────
 CV_FRAME_QUEUE_SIZE_DEFAULT  = 200  # Bounded frame queue — oldest evicted on full
