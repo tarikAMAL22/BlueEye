@@ -31,8 +31,8 @@ LANDMARK_MIN_POINTS   = 10          # Minimum face landmark count (was 25 — ki
 FACE_HEIGHT_MIN_PX    = 20          # Minimum bounding-box height (was 40 — background faces are 25-35px)
 RECOGNITION_TOLERANCE    = 0.50     # face_recognition distance threshold — strict, for identifying known persons
 DEDUP_TOLERANCE          = 0.65     # bio_memory dedup — same person at different angles scores 0.45-0.65
-IDENTITY_MERGE_TOLERANCE = 0.40     # find_similar_unknown_person — only merge if very similar (race condition prevention)
-                                    # 0.40 = clearly same person; 0.40-0.55 = ambiguous → create new ID (safer than wrong merge)
+IDENTITY_MERGE_TOLERANCE = 0.50     # find_similar_unknown_person — same person different pass/angle scores 0.35-0.48
+                                    # 0.50 = matches RECOGNITION_TOLERANCE; different people score 0.55+ → safe boundary
 MERGE_TOLERANCE          = 0.10     # 1 - tolerance for 90 % similarity merge
 
 # ─── Scene buffer ─────────────────────────────────────────────────────────────

@@ -311,6 +311,10 @@ def _do_persist(job: PersistJob) -> None:
         max_face_w = int(w_full * 0.35)
         for haar_cand in haar_faces:
             hx, hy, hw, hh = haar_cand
+            # Reject tiny detections — badges, logos, artifacts
+            if hh < 20 or hw < 20:
+                continue
+            # Reject body-size detections — body, torso
             if hh > max_face_h or hw > max_face_w:
                 logger.debug(
                     "[cam-%d] tracker=%s Haar candidate too large "
@@ -321,7 +325,8 @@ def _do_persist(job: PersistJob) -> None:
                 continue
             haar_loc = (hy, hx + hw, hy + hh, hx)  # (top,right,bottom,left)
             iou_score = _iou(haar_loc, tracker.best.location)
-            if iou_score > best_iou and iou_score > 0.10:
+            # 0.30 threshold: real face overlap 0.40-0.80, badge touching face 0.05-0.15
+            if iou_score > best_iou and iou_score > 0.30:
                 best_iou = iou_score
                 primary_haar = haar_cand
 
