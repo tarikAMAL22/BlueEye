@@ -297,11 +297,28 @@ def _do_persist(job: PersistJob) -> None:
     # Re-crop face snapshot using the detected bbox that best overlaps the tracked location.
     # MediaPipe/Haar gives a tight face bbox → correct framing, no body bleed-in.
     # Falls back to dlib-location recrop or HOG crop if no match found.
+    # ── Face snapshot selection: 3-step waterfall ────────────────────────────
+    # Step 1: Haar/MediaPipe tight bbox → re-crop.
+    # Step 2: dlib-location re-crop (Haar missed, too large, or MP-rejected).
+    # Step 3: HOG crop_bgr fallback (last resort).
+    face_snap_url = None
+
+    # Step 1 — select primary Haar candidate (FIX 1: size guard)
     primary_haar = None
     if len(haar_faces) > 0 and tracker.best.location:
         best_iou = 0.0
+        max_face_h = int(h_full * 0.35)  # >35% of frame height = body, not face
+        max_face_w = int(w_full * 0.35)
         for haar_cand in haar_faces:
             hx, hy, hw, hh = haar_cand
+            if hh > max_face_h or hw > max_face_w:
+                logger.debug(
+                    "[cam-%d] tracker=%s Haar candidate too large "
+                    "(%dx%d > max %dx%d) — skipped",
+                    camera_id, tracker.tracker_id,
+                    hw, hh, max_face_w, max_face_h,
+                )
+                continue
             haar_loc = (hy, hx + hw, hy + hh, hx)  # (top,right,bottom,left)
             iou_score = _iou(haar_loc, tracker.best.location)
             if iou_score > best_iou and iou_score > 0.10:
@@ -317,50 +334,68 @@ def _do_persist(job: PersistJob) -> None:
         cy2  = min(h_full, hy + hh + pad)
         haar_crop = tracker.best.full_frame[cy1:cy2, cx1:cx2]
         if haar_crop.size > 0 and _is_bgr_sane(haar_crop):
-            face_snap_url = _save_image(haar_crop, prefix="face")
-            logger.debug("[cam-%d] tracker=%s face_snap from Haar (%dx%d)", camera_id, tracker.tracker_id, hw, hh)
+            # FIX 2: confirm Haar crop contains a real face via MediaPipe
+            mp_haar_check = _detect_faces_mp(haar_crop, min_confidence=0.3) if _mp_available else True
+            if mp_haar_check:
+                face_snap_url = _save_image(haar_crop, prefix="face")
+                logger.debug(
+                    "[cam-%d] tracker=%s face_snap from Haar (%dx%d) validated by MediaPipe",
+                    camera_id, tracker.tracker_id, hw, hh,
+                )
+            else:
+                logger.info(
+                    "[cam-%d] tracker=%s Haar crop (%dx%d) rejected by MediaPipe — trying dlib-location fallback",
+                    camera_id, tracker.tracker_id, hw, hh,
+                )
+                # face_snap_url stays None → Step 2 runs below
         else:
             if haar_crop.size > 0 and not _is_bgr_sane(haar_crop):
                 logger.error(
-                    "[cam-%d] tracker=%s Haar crop has inverted channels (BGR/RGB bug) — HOG fallback",
+                    "[cam-%d] tracker=%s Haar crop has inverted channels (BGR/RGB bug)",
                     camera_id, tracker.tracker_id,
                 )
-            face_snap_url = _save_image(tracker.best.crop_bgr, prefix="face")
-            logger.debug("[cam-%d] tracker=%s face_snap Haar crop empty/corrupt → HOG fallback", camera_id, tracker.tracker_id)
-    else:
-        # Haar missed this face (tilted/bottom-up angle) → re-crop from full_frame
-        # using the best dlib location. tracker.best.crop_bgr may be from an early
-        # frame where the person was entering the scene (body visible, head out-of-frame).
-        if tracker.best.location and tracker.best.full_frame is not None:
-            ft, fr, fb, fl = tracker.best.location
-            h_f, w_f = tracker.best.full_frame.shape[:2]
-            pad = int(max(fb - ft, fr - fl) * 0.25)
-            lx1 = max(0, fl - pad)
-            ly1 = max(0, ft - pad)
-            lx2 = min(w_f, fr + pad)
-            ly2 = min(h_f, fb + pad)
-            loc_crop = tracker.best.full_frame[ly1:ly2, lx1:lx2]
-            if loc_crop.size > 0 and loc_crop.shape[0] >= 20 and loc_crop.shape[1] >= 20:
-                hsv_loc  = cv2.cvtColor(loc_crop, cv2.COLOR_BGR2HSV)
-                sat_loc  = float(hsv_loc[:, :, 1].mean()) / 255.0
-                if _is_bgr_sane(loc_crop) and sat_loc >= 0.12:
+            # face_snap_url stays None → Step 2 runs below
+
+    # Step 2 — dlib-location re-crop (FIX 3: no sat_loc gate, use MediaPipe instead)
+    # Runs when: Haar was None, too large (size-rejected), or MP-rejected above.
+    if face_snap_url is None and tracker.best.location and tracker.best.full_frame is not None:
+        ft, fr, fb, fl = tracker.best.location
+        h_f, w_f = tracker.best.full_frame.shape[:2]
+        pad = int(max(fb - ft, fr - fl) * 0.25)
+        lx1 = max(0, fl - pad)
+        ly1 = max(0, ft - pad)
+        lx2 = min(w_f, fr + pad)
+        ly2 = min(h_f, fb + pad)
+        loc_crop = tracker.best.full_frame[ly1:ly2, lx1:lx2]
+        if (loc_crop.size > 0
+                and _is_bgr_sane(loc_crop)
+                and loc_crop.shape[0] >= 20
+                and loc_crop.shape[1] >= 20):
+            if _mp_available:
+                if _detect_faces_mp(loc_crop, min_confidence=0.3):
                     face_snap_url = _save_image(loc_crop, prefix="face")
                     logger.debug(
-                        "[cam-%d] tracker=%s dlib-loc crop OK sat=%.3f",
-                        camera_id, tracker.tracker_id, sat_loc,
+                        "[cam-%d] tracker=%s dlib-loc crop validated by MediaPipe",
+                        camera_id, tracker.tracker_id,
                     )
                 else:
-                    logger.warning(
-                        "[cam-%d] tracker=%s dlib-loc crop rejected (sat=%.3f) — HOG fallback",
-                        camera_id, tracker.tracker_id, sat_loc,
+                    logger.info(
+                        "[cam-%d] tracker=%s dlib-loc crop rejected by MediaPipe — HOG fallback",
+                        camera_id, tracker.tracker_id,
                     )
-                    face_snap_url = _save_image(tracker.best.crop_bgr, prefix="face")
+                    # face_snap_url stays None → Step 3 runs below
             else:
-                face_snap_url = _save_image(tracker.best.crop_bgr, prefix="face")
-        else:
-            face_snap_url = _save_image(tracker.best.crop_bgr, prefix="face")
+                face_snap_url = _save_image(loc_crop, prefix="face")
         logger.debug(
-            "[cam-%d] tracker=%s face_snap no Haar match → dlib-location fallback",
+            "[cam-%d] tracker=%s face_snap dlib-location fallback",
+            camera_id, tracker.tracker_id,
+        )
+
+    # Step 3 — HOG crop_bgr fallback (last resort)
+    if face_snap_url is None:
+        face_snap_url = _save_image(tracker.best.crop_bgr, prefix="face")
+        logger.debug(
+            "[cam-%d] tracker=%s face_snap → HOG crop fallback",
             camera_id, tracker.tracker_id,
         )
 
