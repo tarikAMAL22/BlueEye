@@ -58,6 +58,8 @@ _haar = cv2.CascadeClassifier(
     cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
 )
 
+logger = logging.getLogger(__name__)
+
 # MediaPipe Face Detection — primary detector
 # Handles tilted, bottom-up, and partial faces that Haar misses.
 # model_selection=1: full-range model (up to 5m — suitable for corridor cameras)
@@ -70,11 +72,10 @@ try:
     )
     _mp_lock      = threading.Lock()
     _mp_available = True
+    logger.info("MediaPipe Face Detection loaded (model_selection=1)")
 except Exception as _mp_err:
     _mp_available = False
     logger.warning("MediaPipe unavailable — falling back to Haar: %s", _mp_err)
-
-logger = logging.getLogger(__name__)
 
 
 # ─── Tunables — all sourced from DB settings table ───────────────────────────
