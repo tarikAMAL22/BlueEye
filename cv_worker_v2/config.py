@@ -39,15 +39,15 @@ INACTIVITY_TIMEOUT_SEC = 2.0        # Flush a tracker after N seconds without de
 MIN_FRAME_COUNT       = 2           # Minimum detections required before persisting a tracker
 
 # ─── Tracking ────────────────────────────────────────────────────────────────
-SPATIAL_MERGE_PX      = 80          # Max centroid distance to merge trackers (was 100 — too wide for close persons)
-BIOMETRIC_MERGE_SIM   = 0.90        # Min similarity to merge by encoding (biometric-only path)
+SPATIAL_MERGE_PX      = 120         # Max centroid distance to merge trackers
+BIOMETRIC_MERGE_SIM   = 0.50        # Min similarity to merge by encoding (same person different angles scores 0.45-0.65)
 SPATIAL_BIOMETRIC_SIM = 0.30        # Looser similarity floor for spatial+biometric combined merge
                                     # (same person frame-to-frame scores ~0.35–0.70, clearly
                                     #  different people score <0.20 even when spatially close)
 
 # ─── Biometric memory (cooldown) ──────────────────────────────────────────────
-ALERT_COOLDOWN_SEC    = 5           # Seconds before the same encoding can re-alert (was 60 — blocked consecutive persons)
-CAMERA_DEDUP_WINDOW_SEC = 5         # Skip alert if same face seen on same camera within this window
+ALERT_COOLDOWN_SEC    = 30          # Seconds before the same encoding can re-alert (covers full video loop 15-60s)
+CAMERA_DEDUP_WINDOW_SEC = 30        # Skip alert if same face seen on same camera within this window (aligned with cooldown)
 
 # ─── CV pipeline worker defaults (overridden by DB settings at runtime) ───────
 CV_FRAME_QUEUE_SIZE_DEFAULT  = 200  # Bounded frame queue — oldest evicted on full
