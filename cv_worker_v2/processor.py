@@ -1158,14 +1158,11 @@ def _create_secondary_alerts(
     h_full, w_full = tracker.best.full_frame.shape[:2]
 
     for (hx, hy, hw, hh) in haar_faces:
-        # face_recognition location format: (top, right, bottom, left)
         haar_loc = (hy, hx + hw, hy + hh, hx)
 
-        # Skip if this bbox heavily overlaps the primary tracked face
         if primary_location and _iou(haar_loc, primary_location) > 0.4:
             continue
 
-        # Get dlib encoding for this face location
         try:
             extra_encs = face_engine.get_encodings_at_locations(rgb_full, [haar_loc])
         except Exception as exc:
@@ -1177,11 +1174,9 @@ def _create_secondary_alerts(
 
         extra_enc = extra_encs[0]
 
-        # Skip if dlib considers this the same face as the primary
         if face_engine.compare_encodings(primary_encoding, extra_enc) > 0.85:
             continue
 
-        # Identify
         extra_person, extra_sim = face_engine.identify(extra_enc, tolerance=tolerance)
         extra_person_id = extra_person["id"] if extra_person else None
         is_blacklisted  = extra_person is not None and bool(extra_person.get("isBlacklisted"))
@@ -1193,40 +1188,66 @@ def _create_secondary_alerts(
         else:
             extra_threat = "low"
 
-        # Cooldown — bypass for blacklisted
         if not is_blacklisted:
             cooldown = int(settings.get("cvAlertCooldownSec", config.ALERT_COOLDOWN_SEC))
             if not bio_memory.check_and_register(extra_enc, person_id=extra_person_id, cooldown_sec=cooldown):
-                logger.info(
-                    "[cam-%d] secondary person=%s SUPPRESSED by cooldown", camera_id, extra_person_id
-                )
+                logger.info("[cam-%d] secondary person=%s SUPPRESSED by cooldown", camera_id, extra_person_id)
                 continue
 
-        # Save face crop for the secondary person
+        # FIX 1 — annotated frame with green box on the SECONDARY person's position
+        sec_full_frame = tracker.best.full_frame.copy()
+        h_sf, w_sf = sec_full_frame.shape[:2]
+        sx1, sy1 = max(0, hx),      max(0, hy)
+        sx2, sy2 = min(w_sf, hx + hw), min(h_sf, hy + hh)
+        cv2.rectangle(sec_full_frame, (sx1, sy1), (sx2, sy2), (0, 200, 50), 2)
+        sec_frame_url = _save_image(sec_full_frame, prefix="frame_secondary")
+
+        # FIX 2 — validate sec_crop before saving (reject de-dos/shoulder crops)
         pad = int(max(hw, hh) * 0.20)
         x1, y1 = max(0, hx - pad), max(0, hy - pad)
         x2, y2 = min(w_full, hx + hw + pad), min(h_full, hy + hh + pad)
         sec_crop = tracker.best.full_frame[y1:y2, x1:x2]
-        if sec_crop.size > 0 and not _is_bgr_sane(sec_crop):
-            logger.error(
-                "[cam-%d] secondary Haar crop has inverted channels — skipping save, using frame snap",
-                camera_id,
-            )
-            sec_crop = np.zeros((0,), dtype=np.uint8)  # force fallback
-        sec_face_url = _save_image(sec_crop, prefix="face_secondary") if sec_crop.size > 0 else frame_snap_url
+
+        sec_face_url = None
+        if (sec_crop.size > 0 and _is_bgr_sane(sec_crop)
+                and sec_crop.shape[0] >= 20 and sec_crop.shape[1] >= 20):
+            hsv_sec = cv2.cvtColor(sec_crop, cv2.COLOR_BGR2HSV)
+            sat_sec = float(hsv_sec[:, :, 1].mean()) / 255.0
+            if sat_sec >= 0.12:
+                if _mp_available:
+                    if _detect_faces_mp(sec_crop, min_confidence=0.3):
+                        sec_face_url = _save_image(sec_crop, prefix="face_secondary")
+                    else:
+                        logger.info("[cam-%d] secondary crop rejected by MediaPipe (de dos?) — frame fallback", camera_id)
+                else:
+                    # MediaPipe unavailable — sat_mean ≥ 0.12 is sufficient proxy
+                    sec_face_url = _save_image(sec_crop, prefix="face_secondary")
+            else:
+                logger.info("[cam-%d] secondary crop sat=%.3f < 0.12 — artifact rejected", camera_id, sat_sec)
+        if sec_face_url is None:
+            sec_face_url = sec_frame_url  # annotated frame as fallback
 
         # Auto-register unknown secondary person
         if extra_person_id is None:
             extra_person_id = db.insert_unknown_person(extra_enc.tolist(), photo_url=sec_face_url)
             extra_threat = "high"
 
-        # Create movement + alert for secondary person
+        # FIX 3 — person_id dedup: skip if this person already has a recent alert
+        if not is_blacklisted:
+            dedup_win = float(settings.get("cvCameraDedupWindowSec", config.CAMERA_DEDUP_WINDOW_SEC))
+            if db.was_person_alerted_recently(extra_person_id, camera_id, dedup_win):
+                logger.info(
+                    "[cam-%d] secondary person=%d already alerted within %.0fs — skipping",
+                    camera_id, extra_person_id, dedup_win,
+                )
+                continue
+
         sec_movement_id = db.create_movement(
             camera_id=camera_id,
             zone_id=zone_id,
             tracker_id=tracker.tracker_id + "_sec",
             frame_urls=tracker.clip_frame_urls,
-            best_frame_url=frame_snap_url,
+            best_frame_url=sec_frame_url,    # FIX 1: green box on secondary
             face_crop_url=sec_face_url,
             face_count=1,
             frame_count=tracker.frame_count,
@@ -1240,7 +1261,7 @@ def _create_secondary_alerts(
             threat_level=extra_threat,
             confidence=round(extra_sim * 100, 2),
             face_snapshot_url=sec_face_url,
-            best_frame_url=frame_snap_url,
+            best_frame_url=sec_frame_url,    # FIX 1: green box on secondary
             detection_type='FACE',
             face_quality=sec_face_quality,
             metadata={
