@@ -27,6 +27,9 @@ RUN pip install --no-cache-dir --default-timeout=1000 ultralytics
 # Install RetinaFace
 RUN pip install --no-cache-dir --default-timeout=1000 retina-face tf-keras
 
+# Install MediaPipe — primary face detector (replaces Haar for tilt/partial face detection)
+RUN pip install --no-cache-dir --default-timeout=1000 mediapipe
+
 # Copy the entire modular package
 COPY cv_worker_v2/ ./cv_worker_v2/
 
