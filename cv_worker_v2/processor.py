@@ -53,10 +53,26 @@ from .biometric_memory import memory as bio_memory
 from .face_engine import engine as face_engine, Encoding, FaceLocation
 from .validator import validator, sharpness_score
 
-# Haar cascade loaded once at module level — thread-safe for detectMultiScale reads
+# Haar cascade — kept as fallback when MediaPipe unavailable
 _haar = cv2.CascadeClassifier(
     cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
 )
+
+# MediaPipe Face Detection — primary detector
+# Handles tilted, bottom-up, and partial faces that Haar misses.
+# model_selection=1: full-range model (up to 5m — suitable for corridor cameras)
+# NOT thread-safe → protected by _mp_lock
+try:
+    import mediapipe as mp
+    _mp_detector = mp.solutions.face_detection.FaceDetection(
+        model_selection=1,
+        min_detection_confidence=0.5,
+    )
+    _mp_lock      = threading.Lock()
+    _mp_available = True
+except Exception as _mp_err:
+    _mp_available = False
+    logger.warning("MediaPipe unavailable — falling back to Haar: %s", _mp_err)
 
 logger = logging.getLogger(__name__)
 
@@ -245,26 +261,29 @@ def _do_persist(job: PersistJob) -> None:
         cv2.rectangle(full_frame_marked, (fl, ft), (fr, fb), (0, 200, 50), 2)
     frame_snap_url = _save_image(full_frame_marked, prefix="frame")
 
-    # Auto face-count on full frame (Haar cascade, thread-safe)
+    # Face detection for count + crop selection.
+    # Primary: MediaPipe (handles tilted/partial/bottom-up faces, low FP rate).
+    # Fallback: Haar (if MediaPipe unavailable or returns empty on clear face).
     h_full, w_full = tracker.best.full_frame.shape[:2]
-    gray_full = cv2.cvtColor(tracker.best.full_frame, cv2.COLOR_BGR2GRAY)
-    haar_raw = _haar.detectMultiScale(
-        gray_full,
-        scaleFactor=1.05,   # was 1.1 — finer pyramid catches small/distant faces
-        minNeighbors=5,     # 3 generated FP on textured backgrounds (windows, screens); 5 keeps real faces
-        minSize=(30, 30),   # was (50,50) — background faces are ~30-40px
-        maxSize=(400, 400), # prevent full-frame false positives
-    )
-    # Deduplicate: remove overlapping / contained false-positive detections
-    haar_faces = _nms_haar(list(haar_raw) if len(haar_raw) else [])
+    haar_faces = _detect_faces_mp(tracker.best.full_frame) if _mp_available else []
+    if not haar_faces:
+        gray_full  = cv2.cvtColor(tracker.best.full_frame, cv2.COLOR_BGR2GRAY)
+        haar_raw   = _haar.detectMultiScale(
+            gray_full, scaleFactor=1.05, minNeighbors=5,
+            minSize=(30, 30), maxSize=(400, 400),
+        )
+        haar_faces = _nms_haar(list(haar_raw) if len(haar_raw) else [])
+        logger.debug(
+            "[cam-%d] tracker=%s MediaPipe empty → Haar fallback (%d faces)",
+            camera_id, tracker.tracker_id, len(haar_faces),
+        )
     haar_count = len(haar_faces)
 
     # face_count is at least 1 — dlib already confirmed this tracker's face.
-    # Prevents NO FACE banner when Haar misses tilted/bottom-up faces that dlib caught.
+    # Prevents NO FACE banner when detector misses tilted/bottom-up faces.
     face_count = max(1, haar_count)
 
-    # multi_person only when Haar finds secondary faces that don't overlap
-    # the primary tracked location — avoids false positives on textured backgrounds.
+    # multi_person only when secondary faces don't overlap the primary tracked location.
     if haar_count > 1 and tracker.best.location:
         non_primary_count = sum(
             1 for (hx, hy, hw, hh) in haar_faces
@@ -274,9 +293,9 @@ def _do_persist(job: PersistJob) -> None:
     else:
         multi_person = False
 
-    # Re-crop face snapshot using the Haar detection that best overlaps the tracked location.
-    # Haar gives a tight frontal-face bbox → correct framing, no body bleed-in.
-    # Falls back to the HOG-tracked crop if no matching Haar face is found.
+    # Re-crop face snapshot using the detected bbox that best overlaps the tracked location.
+    # MediaPipe/Haar gives a tight face bbox → correct framing, no body bleed-in.
+    # Falls back to dlib-location recrop or HOG crop if no match found.
     primary_haar = None
     if len(haar_faces) > 0 and tracker.best.location:
         best_iou = 0.0
@@ -1234,6 +1253,39 @@ def _create_secondary_alerts(
             "[cam-%d] Secondary alert #%d movement #%d person=%s threat=%s (multi-person frame)",
             camera_id, sec_alert_id, sec_movement_id, extra_person_id, extra_threat,
         )
+
+
+def _detect_faces_mp(frame_bgr: np.ndarray, min_confidence: float = 0.5) -> list:
+    """
+    Detect faces using MediaPipe Face Detection.
+    Returns list of (x, y, w, h) in pixel coords — same format as Haar output.
+    Thread-safe via _mp_lock. Falls back to [] on any error.
+    """
+    h, w = frame_bgr.shape[:2]
+    frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+    try:
+        with _mp_lock:
+            results = _mp_detector.process(frame_rgb)
+    except Exception as exc:
+        logger.warning("MediaPipe detection error: %s", exc)
+        return []
+
+    if not results.detections:
+        return []
+
+    faces = []
+    for detection in results.detections:
+        score = detection.score[0] if detection.score else 0.0
+        if score < min_confidence:
+            continue
+        bbox = detection.location_data.relative_bounding_box
+        x  = int(max(0, bbox.xmin * w))
+        y  = int(max(0, bbox.ymin * h))
+        bw = int(min(w - x, bbox.width  * w))
+        bh = int(min(h - y, bbox.height * h))
+        if bw >= 20 and bh >= 20:
+            faces.append((x, y, bw, bh))
+    return faces
 
 
 def _is_bgr_sane(img: np.ndarray) -> bool:
