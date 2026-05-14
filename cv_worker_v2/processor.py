@@ -1251,24 +1251,40 @@ def _create_secondary_alerts(
         x2, y2 = min(w_full, hx + hw + pad), min(h_full, hy + hh + pad)
         sec_crop = tracker.best.full_frame[y1:y2, x1:x2]
 
+        # Step 1 — validate Haar crop with MediaPipe (no sat_sec gate)
         sec_face_url = None
         if (sec_crop.size > 0 and _is_bgr_sane(sec_crop)
                 and sec_crop.shape[0] >= 20 and sec_crop.shape[1] >= 20):
-            hsv_sec = cv2.cvtColor(sec_crop, cv2.COLOR_BGR2HSV)
-            sat_sec = float(hsv_sec[:, :, 1].mean()) / 255.0
-            if sat_sec >= 0.12:
-                if _mp_available:
-                    if _detect_faces_mp(sec_crop, min_confidence=0.3):
-                        sec_face_url = _save_image(sec_crop, prefix="face_secondary")
-                    else:
-                        logger.info("[cam-%d] secondary crop rejected by MediaPipe (de dos?) — frame fallback", camera_id)
-                else:
-                    # MediaPipe unavailable — sat_mean ≥ 0.12 is sufficient proxy
+            if _mp_available:
+                if _detect_faces_mp(sec_crop, min_confidence=0.3):
                     sec_face_url = _save_image(sec_crop, prefix="face_secondary")
+                else:
+                    logger.info(
+                        "[cam-%d] secondary crop rejected by MediaPipe "
+                        "(de dos/pantalon) — head-zone fallback",
+                        camera_id,
+                    )
             else:
-                logger.info("[cam-%d] secondary crop sat=%.3f < 0.12 — artifact rejected", camera_id, sat_sec)
+                sec_face_url = _save_image(sec_crop, prefix="face_secondary")
+
+        # Step 2 — head-zone fallback: top 45% of Haar bbox when MP rejected sec_crop
         if sec_face_url is None:
-            sec_face_url = sec_frame_url  # annotated frame as fallback
+            head_h    = max(20, int(hh * 0.45))
+            hx1       = max(0, hx - pad)
+            hy1       = max(0, hy - pad)
+            hx2       = min(w_full, hx + hw + pad)
+            hy2       = min(h_full, hy + head_h + pad)
+            head_crop = tracker.best.full_frame[hy1:hy2, hx1:hx2]
+            if (head_crop.size > 0 and _is_bgr_sane(head_crop)
+                    and head_crop.shape[0] >= 20 and head_crop.shape[1] >= 20):
+                if _mp_available:
+                    if _detect_faces_mp(head_crop, min_confidence=0.3):
+                        sec_face_url = _save_image(head_crop, prefix="face_secondary_head")
+                        logger.info("[cam-%d] secondary head-zone crop validated by MP", camera_id)
+                if sec_face_url is None:
+                    sec_face_url = sec_frame_url  # annotated frame — operator sees context
+            else:
+                sec_face_url = sec_frame_url
 
         # Auto-register unknown secondary person
         if extra_person_id is None:
