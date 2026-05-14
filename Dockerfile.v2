@@ -28,8 +28,9 @@ RUN pip install --no-cache-dir --default-timeout=1000 ultralytics
 RUN pip install --no-cache-dir --default-timeout=1000 retina-face tf-keras
 
 # Install MediaPipe — primary face detector (replaces Haar for tilt/partial face detection)
-# Pin to 0.10.9: last version with mp.solutions.face_detection API (0.10.14+ removed it)
-RUN pip install --no-cache-dir --default-timeout=1000 "mediapipe==0.10.9"
+# Pin to 0.10.9 (last version with mp.solutions API) + matching protobuf range
+# protobuf>=4.21 required for runtime_version; <5 to avoid API breaks from other deps
+RUN pip install --no-cache-dir --default-timeout=1000 "protobuf>=4.21.0,<5.0.0" "mediapipe==0.10.9"
 
 # Copy the entire modular package
 COPY cv_worker_v2/ ./cv_worker_v2/
