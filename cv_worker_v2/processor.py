@@ -333,9 +333,15 @@ def _do_persist(job: PersistJob) -> None:
                     if _mp_available else True
             if mp_ok:
                 face_snap_url = _save_image(haar_crop, prefix="face")
+                logger.debug("[cam-%d] tracker=%s Haar crop validated by MP (%dx%d)",
+                             camera_id, tracker.tracker_id, hw, hh)
             else:
+                logger.info("[cam-%d] tracker=%s Haar crop rejected by MP "
+                            "(tableau/badge) — dlib fallback", camera_id, tracker.tracker_id)
                 face_snap_url = None
                 primary_haar  = None
+        else:
+            face_snap_url = _save_image(tracker.best.crop_bgr, prefix="face")
 
     # Step 2 — dlib-location re-crop (FIX 3: no sat_loc gate, use MediaPipe instead)
     # Runs when: Haar was None, too large (size-rejected), or MP-rejected above.
@@ -349,14 +355,16 @@ def _do_persist(job: PersistJob) -> None:
         ly2 = min(h_f, fb + pad)
         loc_crop = tracker.best.full_frame[ly1:ly2, lx1:lx2]
         if (loc_crop.size > 0 and _is_bgr_sane(loc_crop)
-                and loc_crop.shape[0] >= 20
-                and loc_crop.shape[1] >= 20):
+                and loc_crop.shape[0] >= 20 and loc_crop.shape[1] >= 20):
             if _mp_available:
                 if _detect_faces_mp(loc_crop, min_confidence=0.3):
                     face_snap_url = _save_image(loc_crop, prefix="face")
+                    logger.debug("[cam-%d] tracker=%s dlib-loc crop validated by MP",
+                                 camera_id, tracker.tracker_id)
                 else:
-                    face_snap_url = _save_image(
-                        tracker.best.crop_bgr, prefix="face")
+                    logger.info("[cam-%d] tracker=%s dlib-loc crop rejected by MP "
+                                "(chemise/tissu) — HOG fallback", camera_id, tracker.tracker_id)
+                    face_snap_url = _save_image(tracker.best.crop_bgr, prefix="face")
             else:
                 face_snap_url = _save_image(loc_crop, prefix="face")
         else:
@@ -376,7 +384,7 @@ def _do_persist(job: PersistJob) -> None:
             camera_id, tracker.tracker_id,
         )
 
-    detected_face_urls: list = []
+    raw_detected_face_urls: list = []
     if multi_person:
         for (hx, hy, hw, hh) in haar_faces:
             pad = int(max(hw, hh) * 0.20)
@@ -386,7 +394,12 @@ def _do_persist(job: PersistJob) -> None:
             y2 = min(h_full, hy + hh + pad)
             crop = tracker.best.full_frame[y1:y2, x1:x2]
             if crop.size > 0:
-                detected_face_urls.append(_save_image(crop, prefix="face_haar"))
+                raw_detected_face_urls.append(_save_image(crop, prefix="face_haar"))
+
+    # Filter out invalid/duplicate URLs; primary face_snap_url always goes first
+    detected_face_urls = [url for url in raw_detected_face_urls if url and url != face_snap_url]
+    if face_snap_url:
+        detected_face_urls.insert(0, face_snap_url)
 
     logger.info(
         "[cam-%d] tracker=%s HAAR -> %d face(s) multi=%s",

@@ -620,15 +620,25 @@ class DeepAnalyzer(threading.Thread):
             if has_face:
                 continue  # already handled by face-detection path above
 
-            # This body has no associated face — crop head/upper-body area
-            # Use top 40% of the bbox as the "head crop" snapshot
-            head_y2 = by1 + int(body_h * 0.40)
+            # Crop top 40% of body bbox as head snapshot
+            head_y2   = by1 + int(body_h * 0.40)
             head_crop = frame_bgr[by1:head_y2, bx1:bx2]
-            body_snap_url = (
-                _deep_save_image(head_crop, "body_secondary")
-                if head_crop.size > 0
-                else frame_snap_url
-            )
+
+            # Validate head_crop before saving — reject black/dark/empty zones
+            body_snap_url = frame_snap_url  # safe default = annotated frame
+            if (head_crop.size > 0
+                    and head_crop.shape[0] >= 20
+                    and head_crop.shape[1] >= 20
+                    and len(head_crop.shape) == 3):
+                gray_check = cv2.cvtColor(head_crop, cv2.COLOR_BGR2GRAY)
+                mean_brightness = float(gray_check.mean())
+                if mean_brightness > 20:
+                    body_snap_url = _deep_save_image(head_crop, "body_secondary")
+                else:
+                    logger.info("[cam-%d] body head_crop too dark (%.1f) — using frame",
+                                camera_id, mean_brightness)
+            else:
+                logger.info("[cam-%d] body head_crop invalid — using annotated frame", camera_id)
 
             # Register as unknown person (no encoding available)
             body_person_id = db.insert_unknown_person([], photo_url=body_snap_url)
