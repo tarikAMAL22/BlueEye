@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from typing import Optional, List, Dict, Any
 
 import numpy as np
+import face_recognition
 import pymysql                           # sync fallback / pool init
 from dbutils.pooled_db import PooledDB  # connection pooling (DBUtils)
 
@@ -354,14 +355,15 @@ def find_similar_unknown_person(
     enc_np = np.array(encoding, dtype=np.float64)
     for row in rows:
         try:
-            db_enc = np.array(json.loads(row["faceEncoding"]), dtype=np.float64)
-            if db_enc.shape != enc_np.shape:
+            db_enc_list = json.loads(row["faceEncoding"])
+            if not db_enc_list or len(db_enc_list) != 128:
                 continue
-            dist = float(np.linalg.norm(enc_np - db_enc))
+            db_enc = np.array(db_enc_list, dtype=np.float64)
+            dist = float(face_recognition.face_distance([db_enc], enc_np)[0])
             if dist <= max_distance:
                 logger.debug(
-                    "find_similar_unknown: matched person_id=%d dist=%.3f",
-                    row["id"], dist,
+                    "find_similar_unknown: matched person_id=%d dist=%.3f <= %.3f",
+                    row["id"], dist, max_distance,
                 )
                 return int(row["id"])
         except (json.JSONDecodeError, TypeError, ValueError):

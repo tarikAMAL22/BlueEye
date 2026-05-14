@@ -435,7 +435,7 @@ def _do_persist(job: PersistJob) -> None:
         dedup_win = float(settings.get("cvCameraDedupWindowSec", config.CAMERA_DEDUP_WINDOW_SEC))
         existing_pid = db.find_similar_unknown_person(
             encoding.tolist(),
-            max_distance=config.DEDUP_TOLERANCE,
+            max_distance=config.IDENTITY_MERGE_TOLERANCE,  # 0.40 — conservative, avoids merging different persons
             window_sec=dedup_win,
         )
         if existing_pid is not None:

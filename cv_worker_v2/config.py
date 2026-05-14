@@ -29,9 +29,11 @@ DB_POOL_MAX  = int(os.getenv("DB_POOL_MAX", "10"))
 # ─── Face-recognition thresholds ─────────────────────────────────────────────
 LANDMARK_MIN_POINTS   = 10          # Minimum face landmark count (was 25 — killed small/distant faces)
 FACE_HEIGHT_MIN_PX    = 20          # Minimum bounding-box height (was 40 — background faces are 25-35px)
-RECOGNITION_TOLERANCE = 0.50        # face_recognition distance threshold — strict, for identifying known persons
-DEDUP_TOLERANCE       = 0.65        # looser threshold for biometric dedup — same person at different angles scores 0.45-0.65
-MERGE_TOLERANCE       = 0.10        # 1 - tolerance for 90 % similarity merge
+RECOGNITION_TOLERANCE    = 0.50     # face_recognition distance threshold — strict, for identifying known persons
+DEDUP_TOLERANCE          = 0.65     # bio_memory dedup — same person at different angles scores 0.45-0.65
+IDENTITY_MERGE_TOLERANCE = 0.40     # find_similar_unknown_person — only merge if very similar (race condition prevention)
+                                    # 0.40 = clearly same person; 0.40-0.55 = ambiguous → create new ID (safer than wrong merge)
+MERGE_TOLERANCE          = 0.10     # 1 - tolerance for 90 % similarity merge
 
 # ─── Scene buffer ─────────────────────────────────────────────────────────────
 SCENE_BUFFER_SEC      = 3.0         # Seconds to accumulate frames per subject
@@ -51,7 +53,7 @@ CAMERA_DEDUP_WINDOW_SEC = 120       # Skip alert if same face seen on same camer
 
 # ─── CV pipeline worker defaults (overridden by DB settings at runtime) ───────
 CV_FRAME_QUEUE_SIZE_DEFAULT  = 200  # Bounded frame queue — oldest evicted on full
-CV_DETECTION_WORKERS_DEFAULT = 2    # Parallel face-detection threads
+CV_DETECTION_WORKERS_DEFAULT = 1    # Single detection worker eliminates race conditions (was 2 — caused duplicate person_ids)
 
 # ─── Identity reload ──────────────────────────────────────────────────────────
 IDENTITY_RELOAD_SEC   = 3           # Reload persons table every N seconds (low enough to catch newly-created unknowns before next detection)
