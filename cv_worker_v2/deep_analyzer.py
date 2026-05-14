@@ -640,8 +640,12 @@ class DeepAnalyzer(threading.Thread):
             else:
                 logger.info("[cam-%d] body head_crop invalid — using annotated frame", camera_id)
 
-            # Register as unknown person (no encoding available)
-            body_person_id = db.insert_unknown_person([], photo_url=body_snap_url)
+            # Body detected without face — no person inserted, person_id = None
+            logger.info(
+                "[cam-%d] body-only detection — no person inserted, "
+                "alert created with body frame only",
+                camera_id,
+            )
 
             # Draw orange body bounding box on a dedicated best-frame for this alert
             body_annotated = frame_bgr.copy()
@@ -662,24 +666,24 @@ class DeepAnalyzer(threading.Thread):
             sec_alert_id = db.create_alert(
                 camera_id=camera_id,
                 zone_id=zone_id,
-                person_id=body_person_id,
-                threat_level="high",
-                confidence=0.0,
+                person_id=None,
+                threat_level="medium",
+                confidence=None,
                 face_snapshot_url=body_snap_url,
                 best_frame_url=body_frame_url,
+                detection_type="NO_FACE",
+                face_quality="NO_FACE",
                 metadata={
                     "multiPersonFrame":   True,
                     "secondaryDetection": True,
                     "deepDetection":      True,
-                    "deepAnalyzed":       True,
                     "bodyOnlyDetection":  True,
                     "primaryAlertId":     alert_id,
-                    "primaryMovementId":  primary_movement_id,
                 },
             )
             db.link_movement_to_alert(sec_movement_id, sec_alert_id)
             logger.info(
-                "DeepAnalyzer: Body-only secondary alert #%d movement #%d (no face — back/occluded)",
+                "DeepAnalyzer: Body-only alert #%d movement #%d (no face — back/occluded)",
                 sec_alert_id, sec_movement_id,
             )
 

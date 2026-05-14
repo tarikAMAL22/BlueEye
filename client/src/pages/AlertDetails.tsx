@@ -247,8 +247,11 @@ export default function AlertDetails() {
     );
   }
 
-  const isBodyOnly = !!(alert.metadata as any)?.bodyOnlyDetection;
-  const isUnknown = !isBodyOnly && (!alert.personId
+  const isNoFace = alert.detectionType === 'NO_FACE'
+    || alert.faceQuality === 'NO_FACE'
+    || (!alert.personId && !alert.confidence);
+  const isBodyOnly = isNoFace || !!(alert.metadata as any)?.bodyOnlyDetection;
+  const isUnknown = !isNoFace && !isBodyOnly && (!alert.personId
     || getPersonName(alert.personId).toLowerCase().includes("unknown")
     || getPersonRole(alert.personId) === "UNKNOWN");
 
@@ -396,8 +399,15 @@ export default function AlertDetails() {
                     <User className="w-8 h-8 text-primary" />
                   </div>
                   <div>
-                    <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Identified As</h3>
-                    <p className="text-2xl font-bold text-primary">Unknown</p>
+                    <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                      {isNoFace ? "Detection" : "Identified As"}
+                    </h3>
+                    <p className="text-2xl font-bold text-primary">
+                      {isNoFace ? "UNIDENTIFIED" : "Unknown"}
+                    </p>
+                    {isNoFace && (
+                      <p className="text-xs text-muted-foreground mt-0.5">No face visible — no matching attempted</p>
+                    )}
                   </div>
                 </div>
               )}
@@ -493,7 +503,7 @@ export default function AlertDetails() {
       </div>
 
       {/* Identity Resolution */}
-      {isUnknown && (
+      {isUnknown && !isNoFace && (
         <div className="p-6 rounded-xl border border-blue-500/30 bg-blue-500/5 shadow-lg shadow-blue-500/5">
           <div className="flex items-center justify-between mb-6">
             <h3 className="text-sm font-bold text-blue-400 flex items-center gap-2 uppercase tracking-tight">

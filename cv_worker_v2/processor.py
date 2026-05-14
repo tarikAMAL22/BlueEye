@@ -406,16 +406,18 @@ def _do_persist(job: PersistJob) -> None:
         camera_id, tracker.tracker_id, face_count, multi_person,
     )
 
-    # Identify person
-    tolerance = float(settings.get("cvRecognitionTolerance", 0.50))
-    person, similarity = face_engine.identify(encoding, tolerance=tolerance)
-    person_id = person["id"] if person else None
-    if person is None:
-        threat_level = "high"
-    elif person.get("isBlacklisted"):
-        threat_level = "critical"
-    else:
-        threat_level = "low"
+    # ── FACE VALIDITY CHECK ──────────────────────────────────────────────────
+    # Read back the saved crop to confirm it contains a real face via MediaPipe.
+    # If invalid → NO_FACE path: no DB person, no face matching, no bad encoding.
+    face_crop_for_check = None
+    if face_snap_url is not None:
+        try:
+            face_crop_for_check = cv2.imread(
+                os.path.join(config.UPLOAD_DIR, os.path.basename(face_snap_url)))
+        except Exception:
+            face_crop_for_check = None
+    face_is_valid = _face_snap_is_valid(face_snap_url, face_crop_for_check)
+    # ────────────────────────────────────────────────────────────────────────
 
     # Log movement record (always — even if cooldown suppresses the alert)
     movement_id = db.create_movement(
@@ -430,10 +432,63 @@ def _do_persist(job: PersistJob) -> None:
         alert_id=None,  # filled in below if alert is created
     )
 
-    is_blacklisted = person is not None and bool(person.get("isBlacklisted"))
+    if face_is_valid:
+        # ── NORMAL PATH: face detected → identify + match ────────────────────
+        tolerance  = float(settings.get("cvRecognitionTolerance", 0.50))
+        person, similarity = face_engine.identify(encoding, tolerance=tolerance)
+        person_id  = person["id"] if person else None
 
-    # Cooldown / dedup check — always bypassed for blacklisted persons
-    if not is_blacklisted:
+        if person is None:
+            threat_level = "high"
+        elif person.get("isBlacklisted"):
+            threat_level = "critical"
+        else:
+            threat_level = "low"
+
+        was_unknown = (person_id is None)
+        if person_id is None:
+            dedup_win = float(settings.get("cvCameraDedupWindowSec", config.CAMERA_DEDUP_WINDOW_SEC))
+            existing_pid = db.find_similar_unknown_person(
+                encoding.tolist(),
+                max_distance=config.IDENTITY_MERGE_TOLERANCE,
+                window_sec=dedup_win,
+            )
+            if existing_pid is not None:
+                person_id = existing_pid
+                logger.info("[cam-%d] tracker=%s reused person_id=%d",
+                            camera_id, tracker.tracker_id, person_id)
+            else:
+                person_id = db.insert_unknown_person(encoding.tolist(), photo_url=face_snap_url)
+                logger.info("[cam-%d] tracker=%s new unknown person_id=%d",
+                            camera_id, tracker.tracker_id, person_id)
+                face_engine.force_reload()
+            threat_level = "high"
+
+        detection_type  = "FACE"
+        face_quality    = "UNCLEAR" if (not result.valid or tracker.best.sharpness < 30) else "CLEAR"
+        confidence_val  = round(similarity * 100, 2)
+
+    else:
+        # ── NO-FACE PATH: body/cloth detected but no valid face ───────────────
+        logger.info(
+            "[cam-%d] tracker=%s NO VALID FACE — body-only alert "
+            "(no person inserted, no face matching)",
+            camera_id, tracker.tracker_id,
+        )
+        person_id      = None
+        was_unknown    = True
+        threat_level   = "medium"
+        similarity     = 0.0
+        detection_type = "NO_FACE"
+        face_quality   = "NO_FACE"
+        confidence_val = None
+        face_snap_url  = frame_snap_url  # annotated frame as body snapshot
+
+    is_blacklisted = (face_is_valid and person is not None
+                      and bool(person.get("isBlacklisted"))) if face_is_valid else False
+
+    # Cooldown / dedup — only for FACE alerts (NO_FACE has no encoding to dedup on)
+    if face_is_valid and not is_blacklisted:
         cooldown = int(settings.get("cvAlertCooldownSec", config.ALERT_COOLDOWN_SEC))
         if not bio_memory.check_and_register(encoding, person_id=person_id, cooldown_sec=cooldown):
             logger.info(
@@ -442,61 +497,21 @@ def _do_persist(job: PersistJob) -> None:
             )
             return
 
-        # Camera-level encoding dedup: check against ALL recent alerts (not just LIMIT 1).
-        # This catches parallel-worker races where 2 alerts land simultaneously.
         dedup_window = float(settings.get("cvCameraDedupWindowSec", config.CAMERA_DEDUP_WINDOW_SEC))
         if dedup_window > 0:
             recent_encs = db.get_recent_alert_encodings(camera_id, dedup_window)
             if recent_encs:
-                sim_threshold = 1.0 - config.DEDUP_TOLERANCE  # 0.35
+                sim_threshold = 1.0 - config.DEDUP_TOLERANCE
                 for recent_enc_list in recent_encs:
                     recent_enc = np.array(recent_enc_list, dtype=np.float64)
                     sim = face_engine.compare_encodings(encoding, recent_enc)
                     if sim >= sim_threshold:
                         logger.info(
-                            "[cam-%d] tracker=%s ENCODING DEDUP — similar face in last %.0fs "
-                            "(sim=%.3f >= %.3f) — movement #%d logged, alert suppressed",
-                            camera_id, tracker.tracker_id, dedup_window,
-                            sim, sim_threshold, movement_id,
+                            "[cam-%d] tracker=%s ENCODING DEDUP — sim=%.3f — movement #%d logged",
+                            camera_id, tracker.tracker_id, sim, movement_id,
                         )
                         return
-    else:
-        logger.info(
-            "[cam-%d] tracker=%s BLACKLISTED — bypassing cooldown/dedup, forcing critical alert",
-            camera_id, tracker.tracker_id,
-        )
 
-    # Auto-register unknown
-    was_unknown = (person_id is None)
-    if person_id is None:
-        # Check if a parallel worker already inserted a similar unknown in the last window
-        # (race: both workers see person_id=None at t=0 and t=0.1s → two unknown rows)
-        dedup_win = float(settings.get("cvCameraDedupWindowSec", config.CAMERA_DEDUP_WINDOW_SEC))
-        existing_pid = db.find_similar_unknown_person(
-            encoding.tolist(),
-            max_distance=config.IDENTITY_MERGE_TOLERANCE,  # 0.40 — conservative, avoids merging different persons
-            window_sec=dedup_win,
-        )
-        if existing_pid is not None:
-            person_id = existing_pid
-            logger.info(
-                "[cam-%d] tracker=%s reused existing unknown person_id=%d "
-                "(parallel worker race condition prevented)",
-                camera_id, tracker.tracker_id, person_id,
-            )
-        else:
-            person_id = db.insert_unknown_person(encoding.tolist(), photo_url=face_snap_url)
-            logger.info(
-                "[cam-%d] tracker=%s new unknown person_id=%d created",
-                camera_id, tracker.tracker_id, person_id,
-            )
-            face_engine.force_reload()
-        threat_level = "high"
-
-    # Person-ID dedup (primary gate) — permanent in DB, works even after bio_memory expires.
-    # bio_memory is encoding-based and expires after cooldown_sec; person_id never expires.
-    # Checked after insert_unknown_person so person_id is always set at this point.
-    if not is_blacklisted:
         dedup_window_pid = float(settings.get("cvCameraDedupWindowSec", config.CAMERA_DEDUP_WINDOW_SEC))
         if db.was_person_alerted_recently(person_id, camera_id, dedup_window_pid):
             logger.info(
@@ -504,38 +519,43 @@ def _do_persist(job: PersistJob) -> None:
                 camera_id, tracker.tracker_id, person_id, dedup_window_pid, movement_id,
             )
             return
+    elif face_is_valid and is_blacklisted:
+        logger.info(
+            "[cam-%d] tracker=%s BLACKLISTED — bypassing cooldown/dedup, forcing critical alert",
+            camera_id, tracker.tracker_id,
+        )
 
-    # Face quality — UNCLEAR when validator failed or crop is too blurry
-    # sharpness < 80 was too strict (normal faces score 50-150); 30 rejects only real artifacts
-    # similarity < 0.45 removed: unknowns always have similarity=0 → incorrectly tagged UNCLEAR
-    face_quality = 'UNCLEAR' if (not result.valid or tracker.best.sharpness < 30) else 'CLEAR'
-
-    # Serialise alert creation per (person_id, camera_id) to prevent race conditions
-    # between parallel detection workers: both may pass was_person_alerted_recently()
-    # before either commits its INSERT. The double-check inside the lock is the real gate.
-    alert_lock = _get_alert_lock(person_id, camera_id)
+    # Serialise alert creation per (person_id, camera_id) for FACE alerts
+    alert_lock = _get_alert_lock(person_id, camera_id) if person_id is not None else threading.Lock()
     with alert_lock:
-        dedup_win_final = float(settings.get("cvCameraDedupWindowSec", config.CAMERA_DEDUP_WINDOW_SEC))
-        if not is_blacklisted and db.was_person_alerted_recently(person_id, camera_id, dedup_win_final):
-            logger.info(
-                "[cam-%d] tracker=%s DEDUP (inside lock) — person=%d already alerted within %.0fs — suppressed",
-                camera_id, tracker.tracker_id, person_id, dedup_win_final,
-            )
-            return
+        if face_is_valid and not is_blacklisted and person_id is not None:
+            dedup_win_final = float(settings.get("cvCameraDedupWindowSec", config.CAMERA_DEDUP_WINDOW_SEC))
+            if db.was_person_alerted_recently(person_id, camera_id, dedup_win_final):
+                logger.info(
+                    "[cam-%d] tracker=%s DEDUP (inside lock) — person=%d already alerted — suppressed",
+                    camera_id, tracker.tracker_id, person_id,
+                )
+                return
 
-        # Create alert
         alert_id = db.create_alert(
-            camera_id=camera_id, zone_id=zone_id, person_id=person_id,
-            threat_level=threat_level, confidence=round(similarity * 100, 2),
-            face_snapshot_url=face_snap_url, best_frame_url=frame_snap_url,
-            detection_type='FACE',
+            camera_id=camera_id,
+            zone_id=zone_id,
+            person_id=person_id,
+            threat_level=threat_level,
+            confidence=confidence_val,
+            face_snapshot_url=face_snap_url,
+            best_frame_url=frame_snap_url,
+            detection_type=detection_type,
             face_quality=face_quality,
             metadata={
-                "multiPersonFrame": multi_person,
-                "faceCount":        face_count,
-                "detectedFaceUrls": detected_face_urls,
-                "sharpness":        round(tracker.best.sharpness, 2),
-                "deepCheckPassed":  result.valid,
+                "multiPersonFrame":  multi_person,
+                "faceCount":         face_count,
+                "detectedFaceUrls":  detected_face_urls,
+                "sharpness":         round(tracker.best.sharpness, 2),
+                "deepCheckPassed":   result.valid,
+                "deepCheckReason":   result.reason,
+                "faceQuality":       face_quality,
+                "bodyOnlyDetection": (detection_type == "NO_FACE"),
             },
         )
 
@@ -543,7 +563,8 @@ def _do_persist(job: PersistJob) -> None:
     db.link_movement_to_alert(movement_id, alert_id)
 
     # Create secondary alerts for any additional persons Haar detected in this frame
-    if multi_person and face_count > 1:
+    # Only when a valid face was detected (NO_FACE path skips secondary alerts)
+    if face_is_valid and multi_person and face_count > 1:
         _create_secondary_alerts(
             tracker=tracker,
             camera_id=camera_id,
@@ -551,16 +572,19 @@ def _do_persist(job: PersistJob) -> None:
             haar_faces=haar_faces,
             primary_encoding=encoding,
             primary_location=tracker.best.location,
-            tolerance=tolerance,
+            tolerance=float(settings.get("cvRecognitionTolerance", 0.50)),
             settings=settings,
             primary_movement_id=movement_id,
             frame_snap_url=frame_snap_url,
         )
 
+    event_type = "no_face" if detection_type == "NO_FACE" else (
+        "unknown" if was_unknown else "recognition"
+    )
     db.create_event(
         camera_id=camera_id, zone_id=zone_id, person_id=person_id,
-        alert_id=alert_id, confidence=round(similarity * 100, 2),
-        event_type="unknown" if was_unknown else "recognition",
+        alert_id=alert_id, confidence=confidence_val,
+        event_type=event_type,
         payload={
             "trackerID":       tracker.tracker_id,
             "frameCount":      tracker.frame_count,
@@ -1336,6 +1360,20 @@ def _is_bgr_sane(img: np.ndarray) -> bool:
     b_mean = float(np.mean(img[:, :, 0]))
     r_mean = float(np.mean(img[:, :, 2]))
     return not (r_mean > 0 and b_mean > r_mean * 1.5)
+
+
+def _face_snap_is_valid(face_snap_url: "str | None",
+                        crop_bgr: "np.ndarray | None") -> bool:
+    """Returns True if the snapshot actually contains a detectable face."""
+    if face_snap_url is None:
+        return False
+    if crop_bgr is None or crop_bgr.size == 0:
+        return False
+    if _mp_available:
+        return bool(_detect_faces_mp(crop_bgr, min_confidence=0.3))
+    return (_is_bgr_sane(crop_bgr)
+            and crop_bgr.shape[0] >= 30
+            and crop_bgr.shape[1] >= 30)
 
 
 def _save_image(image: np.ndarray, prefix: str = "img") -> str:

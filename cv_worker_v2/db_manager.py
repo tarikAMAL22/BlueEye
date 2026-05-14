@@ -144,9 +144,9 @@ def insert_unknown_person(face_encoding: List[float], photo_url: Optional[str] =
 def create_alert(
     camera_id: int,
     zone_id: int,
-    person_id: int,
+    person_id: Optional[int],
     threat_level: str,
-    confidence: float,
+    confidence: Optional[float],
     face_snapshot_url: str,
     best_frame_url: str,
     metadata: Optional[Dict[str, Any]] = None,
