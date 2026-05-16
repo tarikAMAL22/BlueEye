@@ -362,21 +362,38 @@ def _do_persist(job: PersistJob) -> None:
                     logger.debug("[cam-%d] tracker=%s dlib-loc crop validated by MP",
                                  camera_id, tracker.tracker_id)
                 else:
-                    logger.info("[cam-%d] tracker=%s dlib-loc crop rejected by MP "
-                                "(chemise/tissu) — HOG fallback", camera_id, tracker.tracker_id)
-                    face_snap_url = _save_image(tracker.best.crop_bgr, prefix="face")
+                    logger.info("[cam-%d] tracker=%s dlib-loc crop rejected by MP — "
+                                "trying crop_bgr", camera_id, tracker.tracker_id)
+                    # Validate crop_bgr too before using it
+                    if (_is_bgr_sane(tracker.best.crop_bgr)
+                            and tracker.best.crop_bgr is not None
+                            and tracker.best.crop_bgr.size > 0
+                            and _detect_faces_mp(tracker.best.crop_bgr, min_confidence=0.3)):
+                        face_snap_url = _save_image(tracker.best.crop_bgr, prefix="face")
+                        logger.info("[cam-%d] tracker=%s crop_bgr validated by MP",
+                                    camera_id, tracker.tracker_id)
+                    else:
+                        # Both loc_crop and crop_bgr rejected — use annotated frame
+                        logger.info("[cam-%d] tracker=%s ALL crops rejected by MP — "
+                                    "using annotated frame_snap as face snapshot",
+                                    camera_id, tracker.tracker_id)
+                        face_snap_url = frame_snap_url
             else:
                 face_snap_url = _save_image(loc_crop, prefix="face")
-        else:
-            face_snap_url = _save_image(tracker.best.crop_bgr, prefix="face")
 
-    # Step 3 — HOG crop_bgr fallback (last resort)
+    # Step 3 — last resort fallback
     if face_snap_url is None:
-        face_snap_url = _save_image(tracker.best.crop_bgr, prefix="face")
-        logger.debug(
-            "[cam-%d] tracker=%s face_snap → HOG crop fallback",
-            camera_id, tracker.tracker_id,
-        )
+        # Validate crop_bgr before saving
+        if (tracker.best.crop_bgr is not None
+                and tracker.best.crop_bgr.size > 0
+                and _is_bgr_sane(tracker.best.crop_bgr)):
+            if not _mp_available or _detect_faces_mp(
+                    tracker.best.crop_bgr, min_confidence=0.3):
+                face_snap_url = _save_image(tracker.best.crop_bgr, prefix="face")
+            else:
+                face_snap_url = frame_snap_url  # annotated frame as absolute last resort
+        else:
+            face_snap_url = frame_snap_url
 
     if not _is_bgr_sane(tracker.best.crop_bgr):
         logger.error(
