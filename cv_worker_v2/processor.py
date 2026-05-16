@@ -482,6 +482,10 @@ def _do_persist(job: PersistJob) -> None:
             y2 = min(h_full, hy + hh + pad)
             crop = tracker.best.full_frame[y1:y2, x1:x2]
             if crop.size > 0:
+                # Reject Haar false positives (walls, patterns, glass) via YuNet.
+                # Haar is very noisy when used as fallback without MediaPipe.
+                if _YUNET_AVAILABLE and not _yunet_has_face(crop, min_score=0.45):
+                    continue
                 raw_detected_face_urls.append(_save_image(crop, prefix="face_haar"))
 
     # Filter out invalid/duplicate URLs; primary face_snap_url always goes first
@@ -489,9 +493,15 @@ def _do_persist(job: PersistJob) -> None:
     if face_snap_url:
         detected_face_urls.insert(0, face_snap_url)
 
+    # Recompute face count from validated detections.
+    # Raw haar_count includes false positives; validated_face_count reflects real faces.
+    validated_face_count = max(1, len(detected_face_urls))
+    if validated_face_count <= 1:
+        multi_person = False  # YuNet rejected all secondary faces
+
     logger.info(
-        "[cam-%d] tracker=%s HAAR -> %d face(s) multi=%s",
-        camera_id, tracker.tracker_id, face_count, multi_person,
+        "[cam-%d] tracker=%s HAAR -> %d raw / %d validated face(s) multi=%s",
+        camera_id, tracker.tracker_id, face_count, validated_face_count, multi_person,
     )
 
     # ── FACE VALIDITY CHECK ──────────────────────────────────────────────────
@@ -649,7 +659,7 @@ def _do_persist(job: PersistJob) -> None:
             face_quality=face_quality,
             metadata={
                 "multiPersonFrame":  multi_person,
-                "faceCount":         face_count,
+                "faceCount":         validated_face_count,
                 "detectedFaceUrls":  detected_face_urls,
                 "sharpness":         round(tracker.best.sharpness, 2),
                 "deepCheckPassed":   result.valid,
@@ -664,7 +674,7 @@ def _do_persist(job: PersistJob) -> None:
 
     # Create secondary alerts for any additional persons Haar detected in this frame
     # Only when a valid face was detected (NO_FACE path skips secondary alerts)
-    if face_is_valid and multi_person and face_count > 1:
+    if face_is_valid and multi_person and validated_face_count > 1:
         _create_secondary_alerts(
             tracker=tracker,
             camera_id=camera_id,
@@ -693,7 +703,7 @@ def _do_persist(job: PersistJob) -> None:
             "deepCheckConf":   round(result.confidence, 4),
             "deepCheckPassed": result.valid,
             "deepCheckReason": result.reason,
-            "faceCount":       face_count,
+            "faceCount":       validated_face_count,
             "movementId":      movement_id,
         },
     )

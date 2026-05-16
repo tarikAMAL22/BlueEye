@@ -178,8 +178,15 @@ def detect_faces_raw(frame_bgr: np.ndarray) -> List[Dict[str, Any]]:
     Unified face detector returning bbox dicts.
     Used only for *counting* — identification uses face_recognition separately.
     """
+    global _RETINAFACE_AVAILABLE
     if _RETINAFACE_AVAILABLE:
-        return _detect_faces_retinaface(frame_bgr)
+        try:
+            return _detect_faces_retinaface(frame_bgr)
+        except Exception as exc:
+            # TF/CUDA errors (e.g. "No DNN support for stream") are fatal for
+            # this model — disable RetinaFace for the session and fall through.
+            logger.warning("RetinaFace failed (%s) — disabling for session, falling back to HOG", exc)
+            _RETINAFACE_AVAILABLE = False
 
     # HOG fallback — convert locations to bbox dicts
     locations, _ = _detect_faces_hog(frame_bgr)
