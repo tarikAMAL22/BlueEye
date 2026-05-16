@@ -50,11 +50,13 @@ def _load_yolo() -> bool:
     """Try to load YOLOv8n. Returns True on success."""
     global _YOLO_AVAILABLE, _yolo_model
     try:
+        import torch as _torch
         from ultralytics import YOLO  # type: ignore
-        # 'yolov8n.pt' auto-downloads on first use (~6 MB) — only 'person' class needed
         _yolo_model = YOLO("yolov8n.pt")
+        _device = "cuda" if _torch.cuda.is_available() else "cpu"
+        _yolo_model.to(_device)
         _YOLO_AVAILABLE = True
-        logger.info("DeepAnalyzer: YOLOv8n loaded successfully")
+        logger.info("DeepAnalyzer: YOLOv8n loaded on %s", _device)
         return True
     except Exception as exc:
         logger.warning("DeepAnalyzer: YOLOv8 not available (%s) — falling back to HOG", exc)

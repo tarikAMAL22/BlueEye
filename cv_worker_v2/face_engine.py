@@ -87,14 +87,15 @@ class FaceEngine:
     def detect_faces(
         self,
         rgb_frame: np.ndarray,
-        model: str = "hog",
+        model: str = "cnn",
         upsample: int = 0
     ) -> Tuple[List[FaceLocation], List[Encoding]]:
         """
         Detect faces in *rgb_frame* and compute their 128-d encodings.
 
         Returns (locations, encodings) — both lists, same order.
-        Uses the 'hog' model by default for speed; switch to 'cnn' for accuracy.
+        Uses 'cnn' model by default (dlib CUDA — ~20x faster than HOG on GPU).
+        Falls back to 'hog' automatically if CUDA is unavailable (see processor._USE_CNN).
         *upsample* = number of times to upscale image before searching (finds smaller faces).
         """
         with self._dlib_lock:

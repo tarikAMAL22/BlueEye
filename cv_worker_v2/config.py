@@ -52,8 +52,8 @@ ALERT_COOLDOWN_SEC    = 120         # Seconds before the same encoding can re-al
 CAMERA_DEDUP_WINDOW_SEC = 120       # Skip alert if same face seen on same camera within this window (aligned with cooldown)
 
 # ─── CV pipeline worker defaults (overridden by DB settings at runtime) ───────
-CV_FRAME_QUEUE_SIZE_DEFAULT  = 200  # Bounded frame queue — oldest evicted on full
-CV_DETECTION_WORKERS_DEFAULT = 1    # Single detection worker eliminates race conditions (was 2 — caused duplicate person_ids)
+CV_FRAME_QUEUE_SIZE_DEFAULT  = 500  # Bounded frame queue — larger buffer for GPU throughput
+CV_DETECTION_WORKERS_DEFAULT = 4    # GPU CNN handles 4 parallel workers safely (was 1 — CPU HOG race condition concern no longer applies)
 
 # ─── Identity reload ──────────────────────────────────────────────────────────
 IDENTITY_RELOAD_SEC   = 3           # Reload persons table every N seconds (low enough to catch newly-created unknowns before next detection)
