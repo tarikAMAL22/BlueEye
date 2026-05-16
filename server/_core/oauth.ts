@@ -10,8 +10,9 @@ function getQueryParam(req: Request, key: string): string | undefined {
 }
 
 export function registerOAuthRoutes(app: Express) {
-  // Dev mock portal — ONLY available in development mode
-  if (process.env.NODE_ENV !== "production") {
+  // Self-hosted auth bypass — active when no external OAUTH_SERVER_URL is configured.
+  // Automatically signs in as the owner (OWNER_OPEN_ID) using mock credentials.
+  if (!process.env.OAUTH_SERVER_URL) {
     app.get("/oauth/app-auth", (req: Request, res: Response) => {
       const state = getQueryParam(req, "state") || "dummy-state";
       res.redirect(`/api/oauth/callback?code=mock-code&state=${state}`);
