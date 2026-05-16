@@ -1217,8 +1217,18 @@ def _create_secondary_alerts(
 
         extra_enc = extra_encs[0]
 
-        if face_engine.compare_encodings(primary_encoding, extra_enc) > 0.85:
+        if face_engine.compare_encodings(primary_encoding, extra_enc) > 0.70:
             continue
+
+        # Validate secondary location contains a real face (not reflection/artifact)
+        if _mp_available:
+            pad_c = int(max(hw, hh) * 0.10)
+            x1c = max(0, hx - pad_c); y1c = max(0, hy - pad_c)
+            x2c = min(w_full, hx + hw + pad_c); y2c = min(h_full, hy + hh + pad_c)
+            chk = tracker.best.full_frame[y1c:y2c, x1c:x2c]
+            if chk.size > 0 and not _detect_faces_mp(chk, min_confidence=0.50):
+                logger.info("[cam-%d] secondary location rejected by MediaPipe (reflection/artifact)", camera_id)
+                continue
 
         extra_person, extra_sim = face_engine.identify(extra_enc, tolerance=tolerance)
         extra_person_id = extra_person["id"] if extra_person else None
