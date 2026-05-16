@@ -77,6 +77,56 @@ except Exception as _mp_err:
     _mp_available = False
     logger.warning("MediaPipe unavailable — falling back to Haar: %s", _mp_err)
 
+import urllib.request, os as _os
+
+_YUNET_PATH = _os.path.join(_os.path.dirname(__file__), "models", "yunet.onnx")
+_YUNET_URL  = ("https://github.com/opencv/opencv_zoo/raw/main/models/"
+               "face_detection_yunet/face_detection_yunet_2023mar.onnx")
+_yunet_detector = None
+_yunet_lock     = threading.Lock()
+_YUNET_AVAILABLE = False
+
+def _init_yunet() -> None:
+    global _yunet_detector, _YUNET_AVAILABLE
+    try:
+        _os.makedirs(_os.path.dirname(_YUNET_PATH), exist_ok=True)
+        if not _os.path.exists(_YUNET_PATH):
+            logger.info("Downloading YuNet model (~200KB)...")
+            urllib.request.urlretrieve(_YUNET_URL, _YUNET_PATH)
+        det = cv2.FaceDetectorYN.create(
+            _YUNET_PATH, "", (320, 320),
+            score_threshold=0.60,
+            nms_threshold=0.30,
+            top_k=100,
+        )
+        _yunet_detector = det
+        _YUNET_AVAILABLE = True
+        logger.info("YuNet face detector initialized ✓")
+    except Exception as exc:
+        logger.warning("YuNet init failed: %s — MediaPipe only", exc)
+
+_init_yunet()
+
+def _yunet_has_face(crop_bgr: np.ndarray, min_score: float = 0.55) -> bool:
+    """Return True if YuNet detects at least one face in crop_bgr."""
+    if not _YUNET_AVAILABLE or _yunet_detector is None:
+        return False
+    if crop_bgr is None or crop_bgr.size == 0:
+        return False
+    h, w = crop_bgr.shape[:2]
+    if h < 20 or w < 20:
+        return False
+    try:
+        with _yunet_lock:
+            _yunet_detector.setInputSize((w, h))
+            _, faces = _yunet_detector.detect(crop_bgr)
+        if faces is None:
+            return False
+        return any(float(f[14]) >= min_score for f in faces)
+    except Exception as exc:
+        logger.debug("YuNet detect error: %s", exc)
+        return False
+
 
 # ─── Tunables — all sourced from DB settings table ───────────────────────────
 # These constants are used ONLY as bootstrap defaults before the first
@@ -1067,29 +1117,55 @@ def _update_best_frame(
     encoding: Encoding,
     location: FaceLocation,
 ) -> None:
-    if crop.size == 0:
+    if crop is None or crop.size == 0:
         return
-
-    # Reject corrupt crops (BGR/RGB channel inversion)
     if not _is_bgr_sane(crop):
         return
 
-    # Reject glass/light reflections — they have high Laplacian variance (sharp edges)
-    # and would win the composite score over real faces.
-    # Real skin: sat_mean 0.15–0.40; glass/light: 0.03–0.10
+    # ── 1. Brightness check — reject overexposed glass/windows ──
+    gray_c          = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    mean_brightness = float(gray_c.mean())
+    if mean_brightness > 190:
+        # Overexposed — glass, window, bright light
+        if tracker.best.crop_bgr is not None:
+            return
+        # No best yet — accept as placeholder with heavy penalty
+
+    # ── 2. Saturation check — reject neutral glass/reflections ──
     hsv      = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
     sat_mean = float(hsv[:, :, 1].mean()) / 255.0
     if sat_mean < 0.12:
-        # Accept only if we have no best frame yet (placeholder rather than artifact)
         if tracker.best.crop_bgr is not None:
             return
 
+    # ── 3. YuNet validation — most reliable face check ──────────
+    # YuNet does NOT detect glass, badges, or reflections.
+    # Only real faces with score >= 0.55 pass.
+    is_artifact = (mean_brightness > 190 or sat_mean < 0.12)
+    if not is_artifact:
+        if _YUNET_AVAILABLE:
+            if not _yunet_has_face(crop, min_score=0.55):
+                # YuNet sees no face in this crop
+                if tracker.best.crop_bgr is not None:
+                    return  # keep existing best
+                # No best yet — accept placeholder (better than nothing)
+        elif _mp_available:
+            # YuNet unavailable — fallback to MediaPipe
+            if not _detect_faces_mp(crop, min_confidence=0.4):
+                if tracker.best.crop_bgr is not None:
+                    return
+
+    # ── 4. Score computation — artifacts get heavy penalty ──────
     top, right, bottom, left = location
     area  = float((bottom - top) * (right - left))
-    gray  = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-    sharp = sharpness_score(gray)
-    score = area * 0.6 + sharp * 0.4
+    sharp = sharpness_score(gray_c)
+
+    # Penalize artifacts: they must be far better than existing best
+    # to replace it (effectively they won't win over a real face)
+    penalty = 0.10 if is_artifact else 1.0
+    score   = (area * 0.6 + sharp * 0.4) * penalty
     current = tracker.best.face_area * 0.6 + tracker.best.sharpness * 0.4
+
     if score > current:
         tracker.best.crop_bgr   = crop.copy()
         tracker.best.full_frame = full_frame.copy()
