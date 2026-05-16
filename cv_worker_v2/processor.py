@@ -165,6 +165,11 @@ PERSIST_QUEUE_MAXSIZE = 0  # unbounded — never lose a finalized subject
 _alert_create_locks: dict = {}
 _alert_create_locks_mutex = threading.Lock()
 
+# Serialises find-or-create for unknown persons across all detection workers.
+# Without this, 4 parallel workers can all call find_similar_unknown_person()
+# at the same millisecond, all get None, and all insert a new duplicate person.
+_unknown_person_lock = threading.Lock()
+
 
 def _get_alert_lock(person_id: int, camera_id: int) -> threading.Lock:
     key = (person_id, camera_id)
@@ -531,20 +536,32 @@ def _do_persist(job: PersistJob) -> None:
         was_unknown = (person_id is None)
         if person_id is None:
             dedup_win = float(settings.get("cvCameraDedupWindowSec", config.CAMERA_DEDUP_WINDOW_SEC))
-            existing_pid = db.find_similar_unknown_person(
-                encoding.tolist(),
-                max_distance=config.IDENTITY_MERGE_TOLERANCE,
-                window_sec=dedup_win,
-            )
-            if existing_pid is not None:
-                person_id = existing_pid
-                logger.info("[cam-%d] tracker=%s reused person_id=%d",
-                            camera_id, tracker.tracker_id, person_id)
-            else:
-                person_id = db.insert_unknown_person(encoding.tolist(), photo_url=face_snap_url)
-                logger.info("[cam-%d] tracker=%s new unknown person_id=%d",
-                            camera_id, tracker.tracker_id, person_id)
-                face_engine.force_reload()
+            # Hold the lock for the entire find-or-create so parallel workers
+            # never both see "no match" and both insert a duplicate person.
+            with _unknown_person_lock:
+                # Re-check via face_engine first (reloads happen inside force_reload)
+                person2, _ = face_engine.identify(encoding, tolerance=config.DEDUP_TOLERANCE)
+                if person2 is not None:
+                    person_id = person2["id"]
+                    logger.info("[cam-%d] tracker=%s reused person_id=%d (post-lock identify)",
+                                camera_id, tracker.tracker_id, person_id)
+                else:
+                    # Use DEDUP_TOLERANCE (0.65) — same person at different angles can score
+                    # up to 0.65 distance; IDENTITY_MERGE_TOLERANCE (0.50) was too strict.
+                    existing_pid = db.find_similar_unknown_person(
+                        encoding.tolist(),
+                        max_distance=config.DEDUP_TOLERANCE,
+                        window_sec=dedup_win,
+                    )
+                    if existing_pid is not None:
+                        person_id = existing_pid
+                        logger.info("[cam-%d] tracker=%s reused person_id=%d",
+                                    camera_id, tracker.tracker_id, person_id)
+                    else:
+                        person_id = db.insert_unknown_person(encoding.tolist(), photo_url=face_snap_url)
+                        logger.info("[cam-%d] tracker=%s new unknown person_id=%d",
+                                    camera_id, tracker.tracker_id, person_id)
+                        face_engine.force_reload()
             threat_level = "high"
 
         detection_type  = "FACE"
@@ -1330,13 +1347,17 @@ def _create_secondary_alerts(
             continue
 
         # Validate secondary location contains a real face (not reflection/artifact)
-        if _mp_available:
-            pad_c = int(max(hw, hh) * 0.10)
-            x1c = max(0, hx - pad_c); y1c = max(0, hy - pad_c)
-            x2c = min(w_full, hx + hw + pad_c); y2c = min(h_full, hy + hh + pad_c)
-            chk = tracker.best.full_frame[y1c:y2c, x1c:x2c]
-            if chk.size > 0 and not _detect_faces_mp(chk, min_confidence=0.50):
+        # YuNet is used as fallback when MediaPipe is unavailable (e.g. GPU server).
+        pad_c = int(max(hw, hh) * 0.10)
+        x1c = max(0, hx - pad_c); y1c = max(0, hy - pad_c)
+        x2c = min(w_full, hx + hw + pad_c); y2c = min(h_full, hy + hh + pad_c)
+        chk = tracker.best.full_frame[y1c:y2c, x1c:x2c]
+        if chk.size > 0:
+            if _mp_available and not _detect_faces_mp(chk, min_confidence=0.50):
                 logger.info("[cam-%d] secondary location rejected by MediaPipe (reflection/artifact)", camera_id)
+                continue
+            elif not _mp_available and _YUNET_AVAILABLE and not _yunet_has_face(chk, min_score=0.50):
+                logger.info("[cam-%d] secondary location rejected by YuNet (reflection/artifact)", camera_id)
                 continue
 
         extra_person, extra_sim = face_engine.identify(extra_enc, tolerance=tolerance)
@@ -1370,7 +1391,7 @@ def _create_secondary_alerts(
         x2, y2 = min(w_full, hx + hw + pad), min(h_full, hy + hh + pad)
         sec_crop = tracker.best.full_frame[y1:y2, x1:x2]
 
-        # Step 1 — validate Haar crop with MediaPipe (no sat_sec gate)
+        # Step 1 — validate Haar crop with MediaPipe/YuNet before saving
         sec_face_url = None
         if (sec_crop.size > 0 and _is_bgr_sane(sec_crop)
                 and sec_crop.shape[0] >= 20 and sec_crop.shape[1] >= 20):
@@ -1383,6 +1404,11 @@ def _create_secondary_alerts(
                         "(de dos/pantalon) — head-zone fallback",
                         camera_id,
                     )
+            elif _YUNET_AVAILABLE:
+                if _yunet_has_face(sec_crop, min_score=0.55):
+                    sec_face_url = _save_image(sec_crop, prefix="face_secondary")
+                else:
+                    logger.info("[cam-%d] secondary crop rejected by YuNet (glass/artifact) — head-zone fallback", camera_id)
             else:
                 sec_face_url = _save_image(sec_crop, prefix="face_secondary")
 
@@ -1405,9 +1431,28 @@ def _create_secondary_alerts(
             else:
                 sec_face_url = sec_frame_url
 
-        # Auto-register unknown secondary person
+        # Auto-register unknown secondary person (same dedup logic as primary path)
         if extra_person_id is None:
-            extra_person_id = db.insert_unknown_person(extra_enc.tolist(), photo_url=sec_face_url)
+            dedup_win2 = float(settings.get("cvCameraDedupWindowSec", config.CAMERA_DEDUP_WINDOW_SEC))
+            with _unknown_person_lock:
+                person2, _ = face_engine.identify(extra_enc, tolerance=config.DEDUP_TOLERANCE)
+                if person2 is not None:
+                    extra_person_id = person2["id"]
+                    logger.info("[cam-%d] secondary reused person_id=%d (post-lock identify)",
+                                camera_id, extra_person_id)
+                else:
+                    existing_pid = db.find_similar_unknown_person(
+                        extra_enc.tolist(),
+                        max_distance=config.DEDUP_TOLERANCE,
+                        window_sec=dedup_win2,
+                    )
+                    if existing_pid is not None:
+                        extra_person_id = existing_pid
+                        logger.info("[cam-%d] secondary reused person_id=%d", camera_id, extra_person_id)
+                    else:
+                        extra_person_id = db.insert_unknown_person(extra_enc.tolist(), photo_url=sec_face_url)
+                        logger.info("[cam-%d] secondary new unknown person_id=%d", camera_id, extra_person_id)
+                        face_engine.force_reload()
             extra_threat = "high"
 
         # FIX 3 — person_id dedup: skip if this person already has a recent alert

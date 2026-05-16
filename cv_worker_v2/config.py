@@ -30,9 +30,8 @@ DB_POOL_MAX  = int(os.getenv("DB_POOL_MAX", "10"))
 LANDMARK_MIN_POINTS   = 10          # Minimum face landmark count (was 25 — killed small/distant faces)
 FACE_HEIGHT_MIN_PX    = 20          # Minimum bounding-box height (was 40 — background faces are 25-35px)
 RECOGNITION_TOLERANCE    = 0.50     # face_recognition distance threshold — strict, for identifying known persons
-DEDUP_TOLERANCE          = 0.65     # bio_memory dedup — same person at different angles scores 0.45-0.65
-IDENTITY_MERGE_TOLERANCE = 0.50     # find_similar_unknown_person — same person different pass/angle scores 0.35-0.48
-                                    # 0.50 = matches RECOGNITION_TOLERANCE; different people score 0.55+ → safe boundary
+DEDUP_TOLERANCE          = 0.65     # unknown-person dedup — same person at different angles scores 0.45-0.65
+                                    # used by both bio_memory and find_similar_unknown_person
 MERGE_TOLERANCE          = 0.10     # 1 - tolerance for 90 % similarity merge
 
 # ─── Scene buffer ─────────────────────────────────────────────────────────────
