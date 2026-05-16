@@ -91,8 +91,14 @@ def _init_yunet() -> None:
     try:
         _os.makedirs(_os.path.dirname(_YUNET_PATH), exist_ok=True)
         if not _os.path.exists(_YUNET_PATH):
-            logger.info("Downloading YuNet model (~200KB)...")
+            logger.info("Downloading YuNet model from %s", _YUNET_URL)
             urllib.request.urlretrieve(_YUNET_URL, _YUNET_PATH)
+            size = _os.path.getsize(_YUNET_PATH)
+            logger.info("YuNet downloaded: %.1f KB", size / 1024)
+            if size < 100_000:
+                logger.error("YuNet download too small (%d bytes) — deleting", size)
+                _os.remove(_YUNET_PATH)
+                return
         det = cv2.FaceDetectorYN.create(
             _YUNET_PATH, "", (320, 320),
             score_threshold=0.60,
@@ -101,9 +107,10 @@ def _init_yunet() -> None:
         )
         _yunet_detector = det
         _YUNET_AVAILABLE = True
-        logger.info("YuNet face detector initialized ✓")
+        logger.info("YuNet initialized ✓ (path=%s)", _YUNET_PATH)
     except Exception as exc:
-        logger.warning("YuNet init failed: %s — MediaPipe only", exc)
+        logger.warning("YuNet init failed: %s", exc)
+        _YUNET_AVAILABLE = False
 
 _init_yunet()
 

@@ -127,3 +127,4 @@ streamer_config/
 *.pt
 *.pth
 *.weights
+cv_worker_v2/models/*.onnx
