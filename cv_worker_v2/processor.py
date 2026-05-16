@@ -1490,13 +1490,18 @@ def _is_bgr_sane(img: np.ndarray) -> bool:
 
 def _face_snap_is_valid(face_snap_url: "str | None",
                         crop_bgr: "np.ndarray | None") -> bool:
-    """Returns True if the snapshot actually contains a detectable face."""
+    """Returns True if the snapshot contains a real detectable face."""
     if face_snap_url is None:
         return False
     if crop_bgr is None or crop_bgr.size == 0:
         return False
+    # YuNet is most reliable — use it first
+    if _YUNET_AVAILABLE:
+        return _yunet_has_face(crop_bgr, min_score=0.55)
+    # MediaPipe fallback
     if _mp_available:
         return bool(_detect_faces_mp(crop_bgr, min_confidence=0.3))
+    # No model available — basic sanity check
     return (_is_bgr_sane(crop_bgr)
             and crop_bgr.shape[0] >= 30
             and crop_bgr.shape[1] >= 30)
