@@ -737,7 +737,7 @@ class DetectionWorkerPool:
         small_rgb = cv2.resize(rgb, (0, 0), fx=downscale, fy=downscale)
 
         h_orig, w_orig = frame_bgr.shape[:2]
-        locations, encodings = face_engine.detect_faces(small_rgb, model=_FACE_MODEL, upsample=0)
+        locations, encodings = face_engine.detect_faces(small_rgb, model=_FACE_MODEL, upsample=1)
 
         logger.debug(
             "[cam-%d] RAW detection: %d face(s) found on %dx%d frame (downscale=%.2f)",
