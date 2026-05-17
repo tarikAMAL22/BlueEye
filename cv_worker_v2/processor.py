@@ -556,15 +556,16 @@ def _do_persist(job: PersistJob) -> None:
             # Hold the lock for the entire find-or-create so parallel workers
             # never both see "no match" and both insert a duplicate person.
             with _unknown_person_lock:
-                # Re-check via face_engine first (reloads happen inside force_reload)
-                person2, _ = face_engine.identify(encoding, tolerance=config.DEDUP_TOLERANCE)
+                # Re-check via face_engine first using strict threshold — only reuse
+                # an existing person when the match is confident enough to be correct.
+                person2, _ = face_engine.identify(encoding, tolerance=config.RECOGNITION_TOLERANCE)
                 if person2 is not None:
                     person_id = person2["id"]
                     logger.info("[cam-%d] tracker=%s reused person_id=%d (post-lock identify)",
                                 camera_id, tracker.tracker_id, person_id)
                 else:
-                    # Use DEDUP_TOLERANCE (0.65) — same person at different angles can score
-                    # up to 0.65 distance; IDENTITY_MERGE_TOLERANCE (0.50) was too strict.
+                    # DB dedup uses DEDUP_TOLERANCE (0.55) — slightly looser than recognition
+                    # to merge the same unknown person seen at different angles within the window.
                     existing_pid = db.find_similar_unknown_person(
                         encoding.tolist(),
                         max_distance=config.DEDUP_TOLERANCE,
@@ -1461,7 +1462,7 @@ def _create_secondary_alerts(
         if extra_person_id is None:
             dedup_win2 = config.SCENE_BUFFER_SEC * 40   # ~120s look-back for secondary person creation
             with _unknown_person_lock:
-                person2, _ = face_engine.identify(extra_enc, tolerance=config.DEDUP_TOLERANCE)
+                person2, _ = face_engine.identify(extra_enc, tolerance=config.RECOGNITION_TOLERANCE)
                 if person2 is not None:
                     extra_person_id = person2["id"]
                     logger.info("[cam-%d] secondary reused person_id=%d (post-lock identify)",
