@@ -598,20 +598,17 @@ def _do_persist(job: PersistJob) -> None:
                       and bool(person.get("isBlacklisted"))) if face_is_valid else False
 
     # Cooldown / dedup — only for FACE alerts (NO_FACE has no encoding to dedup on)
+    # bio_memory (global) is intentionally NOT used here: it suppresses cross-camera
+    # alerts for the same person, preventing per-zone alerting. Instead we rely on:
+    #   1. per-camera encoding dedup  (get_recent_alert_encodings)
+    #   2. per-camera person_id dedup (was_person_alerted_recently, inside _alert_create_locks)
+    # These two checks prevent same-camera spam while each camera alerts independently.
     if face_is_valid and not is_blacklisted:
-        cooldown = int(settings.get("cvAlertCooldownSec", config.ALERT_COOLDOWN_SEC))
-        if not bio_memory.check_and_register(encoding, person_id=person_id, cooldown_sec=cooldown):
-            logger.info(
-                "[cam-%d] tracker=%s SUPPRESSED by cooldown (person=%s) — movement #%d logged",
-                camera_id, tracker.tracker_id, person_id, movement_id,
-            )
-            return
-
         dedup_window = float(settings.get("cvCameraDedupWindowSec", config.CAMERA_DEDUP_WINDOW_SEC))
         if dedup_window > 0:
             recent_encs = db.get_recent_alert_encodings(camera_id, dedup_window)
             if recent_encs:
-                sim_threshold = 1.0 - config.DEDUP_TOLERANCE
+                sim_threshold = 1.0 - config.RECOGNITION_TOLERANCE
                 for recent_enc_list in recent_encs:
                     recent_enc = np.array(recent_enc_list, dtype=np.float64)
                     sim = face_engine.compare_encodings(encoding, recent_enc)
@@ -1382,10 +1379,9 @@ def _create_secondary_alerts(
             extra_threat = "low"
 
         if not is_blacklisted:
-            cooldown = int(settings.get("cvAlertCooldownSec", config.ALERT_COOLDOWN_SEC))
-            if not bio_memory.check_and_register(extra_enc, person_id=extra_person_id, cooldown_sec=cooldown):
-                logger.info("[cam-%d] secondary person=%s SUPPRESSED by cooldown", camera_id, extra_person_id)
-                continue
+            # was_person_alerted_recently (below) handles per-camera cooldown.
+            # No global bio_memory check — see primary path comment for rationale.
+            pass
 
         # FIX 1 — annotated frame with green box on the SECONDARY person's position
         sec_full_frame = tracker.best.full_frame.copy()
