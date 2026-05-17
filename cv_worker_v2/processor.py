@@ -170,6 +170,13 @@ _alert_create_locks_mutex = threading.Lock()
 # at the same millisecond, all get None, and all insert a new duplicate person.
 _unknown_person_lock = threading.Lock()
 
+# Presence-based dedup: tracks when each (person_id, camera_id) pair last had
+# a tracker finish. A new tracker finishing < SAME_PASSAGE_GAP_SEC after the
+# previous one is the same physical passage → suppress duplicate alert.
+# A gap > SAME_PASSAGE_GAP_SEC means the person left and came back → new alert.
+_person_last_seen: dict = {}        # (person_id, camera_id) -> monotonic float
+_person_last_seen_lock = threading.Lock()
+
 
 def _get_alert_lock(person_id: int, camera_id: int) -> threading.Lock:
     key = (person_id, camera_id)
@@ -598,34 +605,46 @@ def _do_persist(job: PersistJob) -> None:
                       and bool(person.get("isBlacklisted"))) if face_is_valid else False
 
     # Cooldown / dedup — only for FACE alerts (NO_FACE has no encoding to dedup on)
-    # bio_memory (global) is intentionally NOT used here: it suppresses cross-camera
-    # alerts for the same person, preventing per-zone alerting. Instead we rely on:
-    #   1. per-camera encoding dedup  (get_recent_alert_encodings)
-    #   2. per-camera person_id dedup (was_person_alerted_recently, inside _alert_create_locks)
-    # These two checks prevent same-camera spam while each camera alerts independently.
+    #
+    # Strategy: presence-based dedup instead of fixed time window.
+    #   1. In-memory passage dedup (_person_last_seen): if the last tracker for
+    #      this (person_id, camera_id) finished < SAME_PASSAGE_GAP_SEC ago, it
+    #      is the same physical pass → suppress. If the gap is larger the person
+    #      left and came back → new passage → allow alert.
+    #   2. Encoding dedup (short DB window): guards against re-alerting on the
+    #      same encoding right after a worker restart when _person_last_seen is empty.
+    #   3. Inside _alert_create_locks (below): ultra-short DB check (3 s) to
+    #      prevent two parallel workers from double-inserting the same alert.
     if face_is_valid and not is_blacklisted:
-        dedup_window = float(settings.get("cvCameraDedupWindowSec", config.CAMERA_DEDUP_WINDOW_SEC))
-        if dedup_window > 0:
-            recent_encs = db.get_recent_alert_encodings(camera_id, dedup_window)
-            if recent_encs:
-                sim_threshold = 1.0 - config.RECOGNITION_TOLERANCE
-                for recent_enc_list in recent_encs:
-                    recent_enc = np.array(recent_enc_list, dtype=np.float64)
-                    sim = face_engine.compare_encodings(encoding, recent_enc)
-                    if sim >= sim_threshold:
-                        logger.info(
-                            "[cam-%d] tracker=%s ENCODING DEDUP — sim=%.3f — movement #%d logged",
-                            camera_id, tracker.tracker_id, sim, movement_id,
-                        )
-                        return
+        # ── 1. Presence-based (in-memory) ────────────────────────────────────
+        with _person_last_seen_lock:
+            key = (person_id, camera_id)
+            last_seen = _person_last_seen.get(key, 0.0)
+            now_mono  = time.monotonic()
+            elapsed   = now_mono - last_seen
+            _person_last_seen[key] = now_mono   # update even when suppressing
 
-        dedup_window_pid = float(settings.get("cvCameraDedupWindowSec", config.CAMERA_DEDUP_WINDOW_SEC))
-        if db.was_person_alerted_recently(person_id, camera_id, dedup_window_pid):
+        if elapsed < config.SAME_PASSAGE_GAP_SEC:
             logger.info(
-                "[cam-%d] tracker=%s PERSON_ID DEDUP — person=%d already alerted within %.0fs — movement #%d logged",
-                camera_id, tracker.tracker_id, person_id, dedup_window_pid, movement_id,
+                "[cam-%d] tracker=%s SAME-PASSAGE DEDUP (%.1fs < %.1fs) — movement #%d logged",
+                camera_id, tracker.tracker_id, elapsed, config.SAME_PASSAGE_GAP_SEC, movement_id,
             )
             return
+
+        # ── 2. Encoding dedup — short window, restart-safety ─────────────────
+        enc_window = config.ENCODING_DEDUP_WINDOW_SEC
+        recent_encs = db.get_recent_alert_encodings(camera_id, enc_window)
+        if recent_encs:
+            sim_threshold = 1.0 - config.RECOGNITION_TOLERANCE
+            for recent_enc_list in recent_encs:
+                recent_enc = np.array(recent_enc_list, dtype=np.float64)
+                sim = face_engine.compare_encodings(encoding, recent_enc)
+                if sim >= sim_threshold:
+                    logger.info(
+                        "[cam-%d] tracker=%s ENCODING DEDUP — sim=%.3f — movement #%d logged",
+                        camera_id, tracker.tracker_id, sim, movement_id,
+                    )
+                    return
     elif face_is_valid and is_blacklisted:
         logger.info(
             "[cam-%d] tracker=%s BLACKLISTED — bypassing cooldown/dedup, forcing critical alert",
@@ -636,8 +655,9 @@ def _do_persist(job: PersistJob) -> None:
     alert_lock = _get_alert_lock(person_id, camera_id) if person_id is not None else threading.Lock()
     with alert_lock:
         if face_is_valid and not is_blacklisted and person_id is not None:
-            dedup_win_final = float(settings.get("cvCameraDedupWindowSec", config.CAMERA_DEDUP_WINDOW_SEC))
-            if db.was_person_alerted_recently(person_id, camera_id, dedup_win_final):
+            # Ultra-short window (3s): guards against two parallel workers both
+            # passing the presence-based check above and double-inserting an alert.
+            if db.was_person_alerted_recently(person_id, camera_id, 3):
                 logger.info(
                     "[cam-%d] tracker=%s DEDUP (inside lock) — person=%d already alerted — suppressed",
                     camera_id, tracker.tracker_id, person_id,
@@ -1439,7 +1459,7 @@ def _create_secondary_alerts(
 
         # Auto-register unknown secondary person (same dedup logic as primary path)
         if extra_person_id is None:
-            dedup_win2 = float(settings.get("cvCameraDedupWindowSec", config.CAMERA_DEDUP_WINDOW_SEC))
+            dedup_win2 = config.SCENE_BUFFER_SEC * 40   # ~120s look-back for secondary person creation
             with _unknown_person_lock:
                 person2, _ = face_engine.identify(extra_enc, tolerance=config.DEDUP_TOLERANCE)
                 if person2 is not None:
@@ -1461,13 +1481,19 @@ def _create_secondary_alerts(
                         face_engine.force_reload()
             extra_threat = "high"
 
-        # FIX 3 — person_id dedup: skip if this person already has a recent alert
+        # Presence-based dedup for secondary alerts (same logic as primary path)
         if not is_blacklisted:
-            dedup_win = float(settings.get("cvCameraDedupWindowSec", config.CAMERA_DEDUP_WINDOW_SEC))
-            if db.was_person_alerted_recently(extra_person_id, camera_id, dedup_win):
+            with _person_last_seen_lock:
+                key2 = (extra_person_id, camera_id)
+                last_seen2 = _person_last_seen.get(key2, 0.0)
+                now_mono2  = time.monotonic()
+                elapsed2   = now_mono2 - last_seen2
+                _person_last_seen[key2] = now_mono2
+
+            if elapsed2 < config.SAME_PASSAGE_GAP_SEC:
                 logger.info(
-                    "[cam-%d] secondary person=%d already alerted within %.0fs — skipping",
-                    camera_id, extra_person_id, dedup_win,
+                    "[cam-%d] secondary person=%d SAME-PASSAGE DEDUP (%.1fs) — skipping",
+                    camera_id, extra_person_id, elapsed2,
                 )
                 continue
 
