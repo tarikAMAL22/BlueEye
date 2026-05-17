@@ -552,7 +552,7 @@ def _do_persist(job: PersistJob) -> None:
 
         was_unknown = (person_id is None)
         if person_id is None:
-            dedup_win = float(settings.get("cvCameraDedupWindowSec", config.CAMERA_DEDUP_WINDOW_SEC))
+            dedup_win = config.SCENE_BUFFER_SEC * 40   # ~120s look-back window for unknown person dedup
             # Hold the lock for the entire find-or-create so parallel workers
             # never both see "no match" and both insert a duplicate person.
             with _unknown_person_lock:
