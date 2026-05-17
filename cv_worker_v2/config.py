@@ -49,9 +49,11 @@ SPATIAL_BIOMETRIC_SIM = 0.30        # Looser similarity floor for spatial+biomet
 
 # ─── Dedup / cooldown ────────────────────────────────────────────────────────
 ALERT_COOLDOWN_SEC       = 120      # Seconds before the same encoding can re-alert (covers video loops up to 120s)
-SAME_PASSAGE_GAP_SEC     = 8.0     # In-memory dedup: gap (seconds) between tracker events that defines a NEW passage.
-                                    # Trackers finishing < 8 s apart = same physical pass → suppress duplicate alert.
-                                    # Person leaves + comes back after > 8 s → new passage → new alert.
+SAME_PASSAGE_GAP_SEC     = 20.0    # In-memory dedup: gap (seconds) between tracker events that defines a NEW passage.
+                                    # Trackers finishing < 20 s apart = same physical pass → suppress duplicate alert.
+                                    # Person leaves + comes back after > 20 s → new passage → new alert.
+                                    # 20 s covers intermittent face detection gaps within one walk-by (was 8 s — too short,
+                                    # caused duplicate alerts when the same pass had a ~16 s detection gap).
 ENCODING_DEDUP_WINDOW_SEC = 15     # Short DB encoding-dedup window: suppresses re-alerts after a worker restart
                                     # when the person hasn't left yet (in-memory cache is empty on cold start).
 # CAMERA_DEDUP_WINDOW_SEC removed — replaced by SAME_PASSAGE_GAP_SEC (presence-based, not time-based)
