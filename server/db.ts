@@ -679,7 +679,8 @@ export async function getDashboardSystemStatus() {
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 2000);
-    const res = await fetch("http://cv-worker:5000/health", { signal: ctrl.signal });
+    const cvWorkerUrl = process.env.CV_WORKER_URL ?? "http://localhost:5000";
+    const res = await fetch(`${cvWorkerUrl}/health`, { signal: ctrl.signal });
     clearTimeout(timer);
     cvWorkerAlive = res.ok;
   } catch { /* offline */ }

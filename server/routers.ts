@@ -8,6 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import http from "node:http";
+import { ENV } from "./_core/env";
 
 export const appRouter = router({
   system: systemRouter,
@@ -194,7 +195,7 @@ export const appRouter = router({
         });
         const newId = (result as any).insertId as number;
         if (finalPhotoUrl) {
-          fetch("http://cv-worker:5000/api/encode-person", {
+          fetch("${ENV.cvWorkerUrl}/api/encode-person", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ personId: newId }),
@@ -242,7 +243,7 @@ export const appRouter = router({
         );
         const updated = await db.updatePerson(id, updatePayload as any);
         if (finalPhotoUrl) {
-          fetch("http://cv-worker:5000/api/encode-person", {
+          fetch("${ENV.cvWorkerUrl}/api/encode-person", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ personId: id }),
@@ -275,7 +276,7 @@ export const appRouter = router({
     computeEncoding: protectedProcedure
       .input(z.object({ personId: z.number() }))
       .mutation(async ({ input }) => {
-        const response = await fetch("http://cv-worker:5000/api/encode-person", {
+        const response = await fetch("${ENV.cvWorkerUrl}/api/encode-person", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ personId: input.personId }),
@@ -337,7 +338,7 @@ export const appRouter = router({
       .input(z.object({ imageUrl: z.string() }))
       .mutation(async ({ input }) => {
         try {
-          const response = await fetch("http://cv-worker:5000/api/count-faces", {
+          const response = await fetch("${ENV.cvWorkerUrl}/api/count-faces", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ imageUrl: input.imageUrl }),
@@ -356,7 +357,7 @@ export const appRouter = router({
       .input(z.object({ alertId: z.number() }))
       .mutation(async ({ input }) => {
         try {
-          const response = await fetch("http://cv-worker:5000/api/re-match", {
+          const response = await fetch("${ENV.cvWorkerUrl}/api/re-match", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ alertId: input.alertId }),
