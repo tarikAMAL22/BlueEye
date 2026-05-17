@@ -588,7 +588,7 @@ class DeepAnalyzer(threading.Thread):
                 zone_id=zone_id,
                 person_id=extra_person_id,
                 threat_level=extra_threat,
-                confidence=round(extra_sim * 100, 2),
+                confidence=round((extra_sim or 0) * 100, 2),
                 face_snapshot_url=sec_face_url,
                 best_frame_url=frame_snap_url,
                 metadata={
@@ -677,7 +677,7 @@ class DeepAnalyzer(threading.Thread):
                 zone_id=zone_id,
                 person_id=None,
                 threat_level="medium",
-                confidence=None,
+                confidence=0,
                 face_snapshot_url=body_snap_url,
                 best_frame_url=body_frame_url,
                 detection_type="NO_FACE",
