@@ -195,7 +195,7 @@ export const appRouter = router({
         });
         const newId = (result as any).insertId as number;
         if (finalPhotoUrl) {
-          fetch("${ENV.cvWorkerUrl}/api/encode-person", {
+          fetch(`${ENV.cvWorkerUrl}/api/encode-person`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ personId: newId }),
@@ -243,7 +243,7 @@ export const appRouter = router({
         );
         const updated = await db.updatePerson(id, updatePayload as any);
         if (finalPhotoUrl) {
-          fetch("${ENV.cvWorkerUrl}/api/encode-person", {
+          fetch(`${ENV.cvWorkerUrl}/api/encode-person`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ personId: id }),
@@ -276,7 +276,7 @@ export const appRouter = router({
     computeEncoding: protectedProcedure
       .input(z.object({ personId: z.number() }))
       .mutation(async ({ input }) => {
-        const response = await fetch("${ENV.cvWorkerUrl}/api/encode-person", {
+        const response = await fetch(`${ENV.cvWorkerUrl}/api/encode-person`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ personId: input.personId }),
@@ -338,7 +338,7 @@ export const appRouter = router({
       .input(z.object({ imageUrl: z.string() }))
       .mutation(async ({ input }) => {
         try {
-          const response = await fetch("${ENV.cvWorkerUrl}/api/count-faces", {
+          const response = await fetch(`${ENV.cvWorkerUrl}/api/count-faces`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ imageUrl: input.imageUrl }),
@@ -357,7 +357,7 @@ export const appRouter = router({
       .input(z.object({ alertId: z.number() }))
       .mutation(async ({ input }) => {
         try {
-          const response = await fetch("${ENV.cvWorkerUrl}/api/re-match", {
+          const response = await fetch(`${ENV.cvWorkerUrl}/api/re-match`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ alertId: input.alertId }),
@@ -663,6 +663,102 @@ export const appRouter = router({
       .query(async ({ input }) => {
         return db.getMovementByAlertId(input.alertId);
       }),
+  }),
+
+  // ============ ACCESS GROUPS ============
+  groups: router({
+    list: protectedProcedure.query(async () => {
+      return db.listAccessGroups();
+    }),
+
+    getById: adminProcedure
+      .input(z.object({ id: z.number() }))
+      .query(async ({ input }) => {
+        return db.getAccessGroupById(input.id);
+      }),
+
+    create: adminProcedure
+      .input(z.object({
+        name:        z.string().min(1).max(100),
+        description: z.string().max(255).optional(),
+        color:       z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional(),
+        isDefault:   z.boolean().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        return db.createAccessGroup(input);
+      }),
+
+    update: adminProcedure
+      .input(z.object({
+        id:          z.number(),
+        name:        z.string().min(1).max(100).optional(),
+        description: z.string().max(255).optional(),
+        color:       z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional(),
+        isDefault:   z.boolean().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const { id, ...data } = input;
+        return db.updateAccessGroup(id, data);
+      }),
+
+    delete: adminProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        return db.deleteAccessGroup(input.id);
+      }),
+
+    getZones: protectedProcedure
+      .input(z.object({ groupId: z.number() }))
+      .query(async ({ input }) => {
+        return db.getGroupZones(input.groupId);
+      }),
+
+    addZone: adminProcedure
+      .input(z.object({
+        groupId:    z.number(),
+        zoneId:     z.number(),
+        startTime:  z.string().optional(),
+        endTime:    z.string().optional(),
+        daysOfWeek: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const { groupId, zoneId, ...schedule } = input;
+        return db.addZoneToGroup(groupId, zoneId, schedule);
+      }),
+
+    removeZone: adminProcedure
+      .input(z.object({ groupId: z.number(), zoneId: z.number() }))
+      .mutation(async ({ input }) => {
+        return db.removeZoneFromGroup(input.groupId, input.zoneId);
+      }),
+
+    getMembers: protectedProcedure
+      .input(z.object({ groupId: z.number() }))
+      .query(async ({ input }) => {
+        return db.getGroupMembers(input.groupId);
+      }),
+
+    personGroups: protectedProcedure
+      .input(z.object({ personId: z.number() }))
+      .query(async ({ input }) => {
+        return db.getPersonGroups(input.personId);
+      }),
+
+    addMember: adminProcedure
+      .input(z.object({ personId: z.number(), groupId: z.number() }))
+      .mutation(async ({ input }) => {
+        return db.addPersonToGroup(input.personId, input.groupId);
+      }),
+
+    removeMember: adminProcedure
+      .input(z.object({ personId: z.number(), groupId: z.number() }))
+      .mutation(async ({ input }) => {
+        return db.removePersonFromGroup(input.personId, input.groupId);
+      }),
+
+    allMemberships: protectedProcedure.query(async () => {
+      return db.getAllPersonGroupMemberships();
+    }),
   }),
 });
 

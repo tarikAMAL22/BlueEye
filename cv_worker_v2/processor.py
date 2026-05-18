@@ -665,6 +665,30 @@ def _do_persist(job: PersistJob) -> None:
                 )
                 return
 
+        # ── Zone access check ─────────────────────────────────────────────────
+        # Determine alert type based on zone access:
+        #   - Blacklisted: always "BLACKLISTED_PERSON" (handled above)
+        #   - Unknown person: "UNKNOWN_PERSON"
+        #   - Known person without zone access: "UNAUTHORIZED_ACCESS"
+        #   - Known person with zone access: "AUTHORIZED" (normal)
+        alert_type = "AUTHORIZED"
+        if face_is_valid and not is_blacklisted and person_id is not None:
+            if was_unknown:
+                alert_type = "UNKNOWN_PERSON"
+            else:
+                has_access = db.check_zone_access(person_id, zone_id)
+                if not has_access:
+                    alert_type = "UNAUTHORIZED_ACCESS"
+                    threat_level = "high"
+                    logger.warning(
+                        "[cam-%d] UNAUTHORIZED ACCESS — person_id=%d zone_id=%d",
+                        camera_id, person_id, zone_id,
+                    )
+        elif face_is_valid and is_blacklisted:
+            alert_type = "BLACKLISTED_PERSON"
+        elif not face_is_valid:
+            alert_type = "BODY_ONLY"
+
         alert_id = db.create_alert(
             camera_id=camera_id,
             zone_id=zone_id,
@@ -684,6 +708,7 @@ def _do_persist(job: PersistJob) -> None:
                 "deepCheckReason":   result.reason,
                 "faceQuality":       face_quality,
                 "bodyOnlyDetection": (detection_type == "NO_FACE"),
+                "alertType":         alert_type,
             },
         )
 

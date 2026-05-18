@@ -286,6 +286,20 @@ export default function AlertDetails() {
             <h3 className="text-sm font-medium mb-3 flex items-center gap-2">
               <Video className="w-4 h-4 text-primary" /> Best Frame Capture
             </h3>
+            {(() => {
+              const alertType = (alert.metadata as any)?.alertType;
+              if (alertType === "UNAUTHORIZED_ACCESS") return (
+                <div className="flex items-center gap-2 mb-2 px-3 py-2 rounded-lg bg-red-700/30 border border-red-500 text-red-300 text-xs font-bold uppercase animate-pulse">
+                  <AlertTriangle className="w-4 h-4" /> Unauthorized Zone Access
+                </div>
+              );
+              if (alertType === "UNKNOWN_PERSON") return (
+                <div className="flex items-center gap-2 mb-2 px-3 py-2 rounded-lg bg-purple-700/20 border border-purple-500/60 text-purple-300 text-xs font-bold uppercase">
+                  <Sparkles className="w-4 h-4" /> Unknown Person Detected
+                </div>
+              );
+              return null;
+            })()}
             {isBodyOnly && (
               <div className="flex items-center gap-2 mb-2 px-3 py-2 rounded-lg bg-orange-600/20 border border-orange-500/50 text-orange-400 text-xs font-bold uppercase">
                 <Users className="w-4 h-4" /> Body Only — No Face Visible

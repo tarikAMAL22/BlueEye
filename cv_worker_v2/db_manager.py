@@ -114,9 +114,48 @@ def fetch_all_persons() -> List[Dict[str, Any]]:
     return persons
 
 
+def get_default_group_id() -> Optional[int]:
+    """Return the id of the group marked isDefault=1, or None."""
+    with get_connection() as conn:
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            cur.execute("SELECT id FROM access_groups WHERE isDefault = 1 LIMIT 1")
+            row = cur.fetchone()
+    return row["id"] if row else None
+
+
+def add_person_to_group(person_id: int, group_id: int) -> None:
+    """Add a person to an access group (ignore duplicate)."""
+    sql = """
+        INSERT IGNORE INTO person_group_membership (personId, groupId, addedAt)
+        VALUES (%s, %s, %s)
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (person_id, group_id, datetime.datetime.utcnow()))
+        conn.commit()
+
+
+def check_zone_access(person_id: int, zone_id: int) -> bool:
+    """
+    Return True if the person belongs to at least one group that has access to zone_id.
+    Returns True for unknown persons (no groups) so the caller can handle that separately.
+    """
+    sql = """
+        SELECT COUNT(*) AS cnt
+        FROM person_group_membership pgm
+        JOIN group_zone_access gza ON gza.groupId = pgm.groupId
+        WHERE pgm.personId = %s AND gza.zoneId = %s
+    """
+    with get_connection() as conn:
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            cur.execute(sql, (person_id, zone_id))
+            row = cur.fetchone()
+    return (row["cnt"] > 0) if row else False
+
+
 def insert_unknown_person(face_encoding: List[float], photo_url: Optional[str] = None) -> int:
     """
-    Auto-register an unknown person and return the new person id.
+    Auto-register an unknown person, assign to default group, and return the new person id.
     """
     sql = """
         INSERT INTO persons (name, role, faceEncoding, photoUrl, createdAt, updatedAt)
@@ -138,6 +177,12 @@ def insert_unknown_person(face_encoding: List[float], photo_url: Optional[str] =
             person_id = cur.lastrowid
         conn.commit()
     logger.info("Auto-registered unknown person id=%d", person_id)
+
+    # Assign to default group (e.g. "Inconnus") if one exists
+    default_group_id = get_default_group_id()
+    if default_group_id:
+        add_person_to_group(person_id, default_group_id)
+
     return person_id
 
 

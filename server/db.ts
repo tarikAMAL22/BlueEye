@@ -1,6 +1,6 @@
 import { eq, desc, and, like, gte, lte, ne, isNotNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users, cameras, zones, persons, alerts, events, settings, accessRules, movements, cvWorkerConfig, Camera, Zone, Person, Alert, Event, Setting, InsertCamera, InsertZone, InsertPerson, InsertAlert, InsertEvent, InsertSetting, InsertAccessRule, Movement, CvWorkerConfig, InsertCvWorkerConfig } from "../drizzle/schema";
+import { InsertUser, users, cameras, zones, persons, alerts, events, settings, accessRules, movements, cvWorkerConfig, Camera, Zone, Person, Alert, Event, Setting, InsertCamera, InsertZone, InsertPerson, InsertAlert, InsertEvent, InsertSetting, InsertAccessRule, Movement, CvWorkerConfig, InsertCvWorkerConfig, accessGroups, groupZoneAccess, personGroupMembership, InsertAccessGroup, AccessGroup } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -800,6 +800,124 @@ export async function getDashboardSystemHealth() {
       timestamp: r.event.timestamp,
     })),
   };
+}
+
+// ============ DASHBOARD STATS ============
+
+// ============ ACCESS GROUP QUERIES ============
+
+export async function listAccessGroups() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(accessGroups).orderBy(accessGroups.name);
+}
+
+export async function getAccessGroupById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(accessGroups).where(eq(accessGroups.id, id)).limit(1);
+  return rows[0];
+}
+
+export async function createAccessGroup(data: InsertAccessGroup) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.insert(accessGroups).values(data);
+}
+
+export async function updateAccessGroup(id: number, data: Partial<InsertAccessGroup>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.update(accessGroups).set(data).where(eq(accessGroups.id, id));
+}
+
+export async function deleteAccessGroup(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.delete(accessGroups).where(eq(accessGroups.id, id));
+}
+
+export async function getGroupZones(groupId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({
+    access: groupZoneAccess,
+    zone: zones,
+  }).from(groupZoneAccess)
+    .leftJoin(zones, eq(groupZoneAccess.zoneId, zones.id))
+    .where(eq(groupZoneAccess.groupId, groupId));
+  return rows.map(r => ({ ...r.access, zone: r.zone }));
+}
+
+export async function addZoneToGroup(groupId: number, zoneId: number, schedule?: { startTime?: string; endTime?: string; daysOfWeek?: string }) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.insert(groupZoneAccess).values({
+    groupId,
+    zoneId,
+    startTime:  schedule?.startTime  ?? null,
+    endTime:    schedule?.endTime    ?? null,
+    daysOfWeek: schedule?.daysOfWeek ?? "1234567",
+  });
+}
+
+export async function removeZoneFromGroup(groupId: number, zoneId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.delete(groupZoneAccess).where(
+    and(eq(groupZoneAccess.groupId, groupId), eq(groupZoneAccess.zoneId, zoneId))
+  );
+}
+
+export async function getGroupMembers(groupId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({
+    membership: personGroupMembership,
+    person: persons,
+  }).from(personGroupMembership)
+    .leftJoin(persons, eq(personGroupMembership.personId, persons.id))
+    .where(eq(personGroupMembership.groupId, groupId));
+  return rows.map(r => ({ ...r.membership, person: r.person }));
+}
+
+export async function getPersonGroups(personId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({
+    membership: personGroupMembership,
+    group: accessGroups,
+  }).from(personGroupMembership)
+    .leftJoin(accessGroups, eq(personGroupMembership.groupId, accessGroups.id))
+    .where(eq(personGroupMembership.personId, personId));
+  return rows.map(r => ({ ...r.membership, group: r.group }));
+}
+
+export async function addPersonToGroup(personId: number, groupId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.insert(personGroupMembership).values({ personId, groupId });
+}
+
+export async function removePersonFromGroup(personId: number, groupId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.delete(personGroupMembership).where(
+    and(eq(personGroupMembership.personId, personId), eq(personGroupMembership.groupId, groupId))
+  );
+}
+
+export async function getAllPersonGroupMemberships() {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({
+    personId: personGroupMembership.personId,
+    groupId:  personGroupMembership.groupId,
+    groupName:  accessGroups.name,
+    groupColor: accessGroups.color,
+  }).from(personGroupMembership)
+    .leftJoin(accessGroups, eq(personGroupMembership.groupId, accessGroups.id));
+  return rows;
 }
 
 // ============ DASHBOARD STATS ============

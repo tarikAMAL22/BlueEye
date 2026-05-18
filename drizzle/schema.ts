@@ -139,6 +139,49 @@ export type AccessRule = typeof accessRules.$inferSelect;
 export type InsertAccessRule = typeof accessRules.$inferInsert;
 
 /**
+ * AccessGroups table: named groups for zone access control
+ */
+export const accessGroups = mysqlTable("access_groups", {
+  id:          int("id").autoincrement().primaryKey(),
+  name:        varchar("name", { length: 100 }).notNull(),
+  description: varchar("description", { length: 255 }),
+  color:       varchar("color", { length: 7 }).default("#00F5FF"),
+  isDefault:   boolean("isDefault").default(false).notNull(),
+  createdAt:   timestamp("createdAt").defaultNow().notNull(),
+  updatedAt:   timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type AccessGroup = typeof accessGroups.$inferSelect;
+export type InsertAccessGroup = typeof accessGroups.$inferInsert;
+
+/**
+ * GroupZoneAccess table: which zones a group can access (with optional schedule)
+ */
+export const groupZoneAccess = mysqlTable("group_zone_access", {
+  id:         int("id").autoincrement().primaryKey(),
+  groupId:    int("groupId").notNull().references(() => accessGroups.id, { onDelete: "cascade" }),
+  zoneId:     int("zoneId").notNull().references(() => zones.id, { onDelete: "cascade" }),
+  startTime:  varchar("startTime", { length: 5 }),
+  endTime:    varchar("endTime", { length: 5 }),
+  daysOfWeek: varchar("daysOfWeek", { length: 20 }).default("1234567"),
+  createdAt:  timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type GroupZoneAccess = typeof groupZoneAccess.$inferSelect;
+
+/**
+ * PersonGroupMembership table: persons belonging to access groups
+ */
+export const personGroupMembership = mysqlTable("person_group_membership", {
+  id:       int("id").autoincrement().primaryKey(),
+  personId: int("personId").notNull().references(() => persons.id, { onDelete: "cascade" }),
+  groupId:  int("groupId").notNull().references(() => accessGroups.id, { onDelete: "cascade" }),
+  addedAt:  timestamp("addedAt").defaultNow().notNull(),
+});
+
+export type PersonGroupMembership = typeof personGroupMembership.$inferSelect;
+
+/**
  * Movements table: every face detection tracker, including cooldown-suppressed ones.
  * frameUrls is a JSON array of /uploads/clip_xxx.jpg paths for the flipbook player.
  */

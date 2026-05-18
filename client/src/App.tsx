@@ -20,6 +20,7 @@ import MotionDetections from "./pages/MotionDetections";
 import AlertDetails from "./pages/AlertDetails";
 import MovementDetails from "./pages/MovementDetails";
 import ManageUnknownReview from "./pages/ManageUnknownReview";
+import AccessGroups from "./pages/AccessGroups";
 import { useAuth } from "./_core/hooks/useAuth";
 
 function Router() {
@@ -67,6 +68,7 @@ function Router() {
         <Route path={"/cameras"}>{isAdmin ? <CameraManagement /> : <Forbidden />}</Route>
         <Route path={"/zones"}>{isAdmin ? <ZoneManagement /> : <Forbidden />}</Route>
         <Route path={"/blacklist"}>{isAdmin ? <BlacklistManagement /> : <Forbidden />}</Route>
+        <Route path={"/access-groups"}>{isAdmin ? <AccessGroups /> : <Forbidden />}</Route>
         <Route path={"/settings"}>{isAdmin ? <SystemSettings /> : <Forbidden />}</Route>
         
         <Route path={"/404"} component={NotFound} />

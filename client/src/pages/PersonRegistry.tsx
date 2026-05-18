@@ -33,6 +33,18 @@ export default function PersonRegistry() {
   const { data: persons, isLoading, refetch } = trpc.persons.list.useQuery();
   const { data: zones }    = trpc.zones.list.useQuery();
   const { data: settings } = trpc.settings.get.useQuery();
+  const { data: groups }            = trpc.groups.list.useQuery();
+  const { data: allMemberships }    = trpc.groups.allMemberships.useQuery();
+
+  const personGroupsMap = useMemo(() => {
+    if (!allMemberships) return new Map<number, { groupId: number; groupName: string; groupColor: string }[]>();
+    const map = new Map<number, { groupId: number; groupName: string; groupColor: string }[]>();
+    for (const m of allMemberships) {
+      if (!map.has(m.personId)) map.set(m.personId, []);
+      map.get(m.personId)!.push({ groupId: m.groupId, groupName: m.groupName ?? "", groupColor: m.groupColor ?? "#888" });
+    }
+    return map;
+  }, [allMemberships]);
   const createMutation = trpc.persons.create.useMutation();
   const updateMutation = trpc.persons.update.useMutation();
   const deleteMutation = trpc.persons.delete.useMutation();
@@ -294,9 +306,20 @@ export default function PersonRegistry() {
                             </Badge>
                           </TableCell>
                           <TableCell>
-                            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                              <Shield className="w-3.5 h-3.5 text-primary/70" />
-                              <span>{zones?.length || 0} Security Zones</span>
+                            <div className="flex flex-wrap gap-1">
+                              {(personGroupsMap.get(person.id) ?? []).length > 0
+                                ? (personGroupsMap.get(person.id) ?? []).map(g => (
+                                    <Badge
+                                      key={g.groupId}
+                                      variant="outline"
+                                      className="text-[9px] h-4 px-1.5 leading-none border"
+                                      style={{ borderColor: g.groupColor + "60", color: g.groupColor }}
+                                    >
+                                      {g.groupName}
+                                    </Badge>
+                                  ))
+                                : <span className="text-[11px] text-muted-foreground italic">No group</span>
+                              }
                             </div>
                           </TableCell>
                           <TableCell className="text-xs font-medium text-muted-foreground">

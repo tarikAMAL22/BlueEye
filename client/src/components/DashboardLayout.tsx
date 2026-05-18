@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/sidebar";
 import { getLoginUrl } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
-import { LayoutDashboard, LogOut, PanelLeft, Users, AlertCircle, FileText, Shield, Settings, Camera, Eye, AlertTriangle, Film } from "lucide-react";
+import { LayoutDashboard, LogOut, PanelLeft, Users, AlertCircle, FileText, Shield, Settings, Camera, Eye, AlertTriangle, Film, UsersRound } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
@@ -38,6 +38,7 @@ const getMenuItems = (isAdmin: boolean) => {
   const adminItems = isAdmin ? [
     { icon: Users, label: "Person Registry", path: "/persons" },
     { icon: AlertTriangle, label: "Blacklist", path: "/blacklist" },
+    { icon: UsersRound, label: "Access Groups", path: "/access-groups" },
     { icon: Camera, label: "Camera Management", path: "/cameras" },
     { icon: Shield, label: "Zone Management", path: "/zones" },
     { icon: Settings, label: "System Settings", path: "/settings" },
