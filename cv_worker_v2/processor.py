@@ -137,7 +137,7 @@ def _yunet_has_face(crop_bgr: np.ndarray, min_score: float = 0.55) -> bool:
 # ─── dlib CUDA check — determines face detection model ───────────────────────
 try:
     import dlib as _dlib_mod
-    _USE_CNN = bool(_dlib_mod.DLIB_USE_CUDA)
+    _USE_CNN = bool(_dlib_mod.DLIB_USE_CUDA) and not os.getenv("FORCE_CPU_DETECTION")
 except Exception:
     _USE_CNN = False
 _FACE_MODEL = "cnn" if _USE_CNN else "hog"

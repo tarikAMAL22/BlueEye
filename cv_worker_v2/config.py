@@ -48,19 +48,14 @@ SPATIAL_BIOMETRIC_SIM = 0.30        # Looser similarity floor for spatial+biomet
                                     #  different people score <0.20 even when spatially close)
 
 # ─── Dedup / cooldown ────────────────────────────────────────────────────────
-ALERT_COOLDOWN_SEC       = 120      # Seconds before the same encoding can re-alert (covers video loops up to 120s)
-SAME_PASSAGE_GAP_SEC     = 20.0    # In-memory dedup: gap (seconds) between tracker events that defines a NEW passage.
-                                    # Trackers finishing < 20 s apart = same physical pass → suppress duplicate alert.
-                                    # Person leaves + comes back after > 20 s → new passage → new alert.
-                                    # 20 s covers intermittent face detection gaps within one walk-by (was 8 s — too short,
-                                    # caused duplicate alerts when the same pass had a ~16 s detection gap).
-ENCODING_DEDUP_WINDOW_SEC = 15     # Short DB encoding-dedup window: suppresses re-alerts after a worker restart
-                                    # when the person hasn't left yet (in-memory cache is empty on cold start).
+ALERT_COOLDOWN_SEC       = 10       # Seconds before the same encoding can re-alert (short for video loop testing)
+SAME_PASSAGE_GAP_SEC     = 3.0     # In-memory dedup: gap (seconds) between tracker events that defines a NEW passage.
+ENCODING_DEDUP_WINDOW_SEC = 5      # Short DB encoding-dedup window: suppresses re-alerts after a worker restart.
 # CAMERA_DEDUP_WINDOW_SEC removed — replaced by SAME_PASSAGE_GAP_SEC (presence-based, not time-based)
 
 # ─── CV pipeline worker defaults (overridden by DB settings at runtime) ───────
 CV_FRAME_QUEUE_SIZE_DEFAULT  = 500  # Bounded frame queue — larger buffer for GPU throughput
-CV_DETECTION_WORKERS_DEFAULT = 4    # GPU CNN handles 4 parallel workers safely (was 1 — CPU HOG race condition concern no longer applies)
+CV_DETECTION_WORKERS_DEFAULT = 2    # Reduced to 2 workers to stay within 256-PID cgroup limit on Vast.ai
 
 # ─── Identity reload ──────────────────────────────────────────────────────────
 IDENTITY_RELOAD_SEC   = 3           # Reload persons table every N seconds (low enough to catch newly-created unknowns before next detection)

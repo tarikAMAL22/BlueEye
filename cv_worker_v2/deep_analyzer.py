@@ -46,14 +46,21 @@ logger = logging.getLogger(__name__)
 _YOLO_AVAILABLE = False
 _yolo_model = None
 
+# DISABLE_DEEP_ANALYZER=1 skips PyTorch/YOLO/RetinaFace loading entirely.
+# Required on CPUs without AVX2 (e.g. Intel Pentium Gold) where PyTorch crashes with SIGILL.
+_DEEP_ANALYZER_DISABLED = bool(os.getenv("DISABLE_DEEP_ANALYZER"))
+
 def _load_yolo() -> bool:
     """Try to load YOLOv8n. Returns True on success."""
     global _YOLO_AVAILABLE, _yolo_model
+    if _DEEP_ANALYZER_DISABLED:
+        logger.info("DeepAnalyzer: YOLO disabled via DISABLE_DEEP_ANALYZER env var (no AVX2 CPU)")
+        return False
     try:
         import torch as _torch
         from ultralytics import YOLO  # type: ignore
         _yolo_model = YOLO("yolov8n.pt")
-        _device = "cuda" if _torch.cuda.is_available() else "cpu"
+        _device = "cuda" if (_torch.cuda.is_available() and not os.getenv("FORCE_CPU_DETECTION")) else "cpu"
         _yolo_model.to(_device)
         _YOLO_AVAILABLE = True
         logger.info("DeepAnalyzer: YOLOv8n loaded on %s", _device)
@@ -67,6 +74,8 @@ _RETINAFACE_AVAILABLE = False
 def _load_retinaface() -> bool:
     """Try to import RetinaFace. Returns True on success."""
     global _RETINAFACE_AVAILABLE
+    if _DEEP_ANALYZER_DISABLED:
+        return False
     try:
         import retinaface  # type: ignore  # noqa: F401
         _RETINAFACE_AVAILABLE = True
