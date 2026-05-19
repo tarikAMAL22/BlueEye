@@ -195,6 +195,7 @@ export const movements = mysqlTable("movements", {
   faceCropUrl:  varchar("faceCropUrl",  { length: 512 }),
   faceCount:    int("faceCount").notNull().default(0),
   frameCount:   int("frameCount").notNull().default(0),
+  detectionType: mysqlEnum("detectionType", ["FACE", "BODY", "MOTION"]).default("MOTION").notNull(),
   alertId:           int("alertId"),
   suppressionReason: varchar("suppressionReason", { length: 32 }),
   suppressionDetails: json("suppressionDetails").$type<{
@@ -259,6 +260,8 @@ export const settings = mysqlTable("settings", {
   clearOnStart: boolean("clearOnStart").default(false).notNull(),
   testMode: boolean("testMode").default(false).notNull(),
   biometricThreshold: decimal("biometricThreshold", { precision: 3, scale: 2 }).default("0.50").notNull(),
+  cvMotionClipMaxFrames: int("cvMotionClipMaxFrames").default(20).notNull(),
+  cvFlipbookInterval: int("cvFlipbookInterval").default(500).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });

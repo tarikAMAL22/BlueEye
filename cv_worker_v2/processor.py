@@ -524,6 +524,14 @@ def _do_persist(job: PersistJob) -> None:
     face_is_valid = _face_snap_is_valid(face_snap_url, face_crop_for_check)
     # ────────────────────────────────────────────────────────────────────────
 
+    # Determine movement detectionType from face validity
+    if detection_type == "FACE" and face_is_valid:
+        mov_detection_type = "FACE"
+    elif detection_type == "NO_FACE" or not face_is_valid:
+        mov_detection_type = "BODY"
+    else:
+        mov_detection_type = "MOTION"
+
     # Log movement record (always — even if cooldown suppresses the alert)
     movement_id = db.create_movement(
         camera_id=camera_id,
@@ -535,6 +543,7 @@ def _do_persist(job: PersistJob) -> None:
         face_count=face_count,
         frame_count=tracker.frame_count,
         alert_id=None,  # filled in below if alert is created
+        detection_type=mov_detection_type,
     )
 
     if face_is_valid:
@@ -911,11 +920,13 @@ class DetectionWorkerPool:
                     continue
                 _update_best_frame(tracker, frame_bgr, crop, encoding, location)
 
-                # Sample frames for the motion clip (max 12, every 3rd detection).
+                # Sample frames for the motion clip (configurable max/frequency).
                 # Prefix includes the frame's capture timestamp (ms, zero-padded to 13
                 # digits) so filenames sort lexicographically = chronologically.
                 # This survives concurrent detection workers that may append out of order.
-                if tracker.frame_count % 3 == 0 and len(tracker.clip_frame_urls) < 12:
+                max_clip_frames = int(settings.get("cvMotionClipMaxFrames", config.MOTION_CLIP_MAX_FRAMES))
+                every_n = int(settings.get("cvMotionClipEveryN", config.MOTION_CLIP_EVERY_N))
+                if tracker.frame_count % every_n == 0 and len(tracker.clip_frame_urls) < max_clip_frames:
                     h_fr2, w_fr2 = frame_bgr.shape[:2]
                     clip_small = cv2.resize(frame_bgr, (w_fr2 // 2, h_fr2 // 2))
                     ts_ms = int(job.captured_at * 1000)

@@ -532,18 +532,19 @@ export async function getPotentialMatches(personId: number, customThreshold?: nu
 // Add those columns back after: ALTER TABLE movements ADD COLUMN suppressionReason VARCHAR(32) NULL,
 //   ADD COLUMN suppressionDetails JSON NULL;
 const SAFE_MOVEMENT_COLS = {
-  id:           movements.id,
-  cameraId:     movements.cameraId,
-  zoneId:       movements.zoneId,
-  trackerId:    movements.trackerId,
-  frameUrls:    movements.frameUrls,
-  bestFrameUrl: movements.bestFrameUrl,
-  faceCropUrl:  movements.faceCropUrl,
-  faceCount:    movements.faceCount,
-  frameCount:   movements.frameCount,
-  alertId:      movements.alertId,
-  timestamp:    movements.timestamp,
-  createdAt:    movements.createdAt,
+  id:            movements.id,
+  cameraId:      movements.cameraId,
+  zoneId:        movements.zoneId,
+  trackerId:     movements.trackerId,
+  frameUrls:     movements.frameUrls,
+  bestFrameUrl:  movements.bestFrameUrl,
+  faceCropUrl:   movements.faceCropUrl,
+  faceCount:     movements.faceCount,
+  frameCount:    movements.frameCount,
+  detectionType: movements.detectionType,
+  alertId:       movements.alertId,
+  timestamp:     movements.timestamp,
+  createdAt:     movements.createdAt,
 } as const;
 
 // After running the ALTER TABLE above, swap SAFE_MOVEMENT_COLS for movements (all columns).
@@ -580,6 +581,7 @@ export async function getMovements(filters: {
   alertId?: number;
   startDate?: string;
   endDate?: string;
+  detectionType?: "FACE" | "BODY" | "MOTION";
 } = {}) {
   const db = await getDb();
   if (!db) return [];
@@ -589,8 +591,9 @@ export async function getMovements(filters: {
   if (filters.cameraId)  conditions.push(eq(movements.cameraId,  filters.cameraId));
   if (filters.zoneId)    conditions.push(eq(movements.zoneId,    filters.zoneId));
   if (filters.alertId)   conditions.push(eq(movements.alertId,   filters.alertId));
-  if (filters.startDate) conditions.push(gte(movements.timestamp, new Date(filters.startDate)));
-  if (filters.endDate)   conditions.push(lte(movements.timestamp, new Date(filters.endDate)));
+  if (filters.startDate)     conditions.push(gte(movements.timestamp, new Date(filters.startDate)));
+  if (filters.endDate)       conditions.push(lte(movements.timestamp, new Date(filters.endDate)));
+  if (filters.detectionType) conditions.push(eq(movements.detectionType, filters.detectionType));
 
   const buildQuery = (sel: any) => {
     let q = db.select(sel).from(movements);

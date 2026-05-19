@@ -57,6 +57,8 @@ export default function SystemSettings() {
   const [testMode, setTestMode]           = useState(false);
   const [emailAlerts, setEmailAlerts]     = useState(true);
   const [pushAlerts, setPushAlerts]       = useState(true);
+  const [cvMotionClipMaxFrames, setCvMotionClipMaxFrames] = useState(20);
+  const [cvFlipbookInterval, setCvFlipbookInterval]       = useState(500);
 
 
   const { data: settings, isLoading } = trpc.settings.get.useQuery();
@@ -77,6 +79,8 @@ export default function SystemSettings() {
       setEmailAlerts(settings.notificationPreferences.emailAlerts ?? true);
       setPushAlerts(settings.notificationPreferences.pushAlerts ?? true);
     }
+    setCvMotionClipMaxFrames((settings as any).cvMotionClipMaxFrames ?? 20);
+    setCvFlipbookInterval((settings as any).cvFlipbookInterval ?? 500);
 
   }, [settings]);
 
@@ -88,7 +92,9 @@ export default function SystemSettings() {
         clearOnStart,
         testMode,
         notificationPreferences: { emailAlerts, pushAlerts },
-      });
+        cvMotionClipMaxFrames,
+        cvFlipbookInterval,
+      } as any);
       toast.success("Settings saved successfully");
     } catch (error) {
       toast.error("Failed to save settings");
@@ -194,6 +200,48 @@ export default function SystemSettings() {
             </div>
             <Switch checked={pushAlerts} onCheckedChange={setPushAlerts} />
           </div>
+        </CardContent>
+      </Card>
+
+      {/* ── Motion Recording ── */}
+      <Card className="glow-card bg-card/50 backdrop-blur">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Film className="w-5 h-5" />
+            Motion Recording
+          </CardTitle>
+          <CardDescription>Configure motion clip capture and playback speed</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <Field
+            label="Max frames per motion clip"
+            hint={`${cvMotionClipMaxFrames} frames max — with every-2nd-frame sampling at 150ms intervals = up to ${(cvMotionClipMaxFrames * 2 * 0.15).toFixed(1)}s of motion`}
+          >
+            <div className="flex items-center gap-4">
+              <Slider
+                min={5} max={50} step={1}
+                value={[cvMotionClipMaxFrames]}
+                onValueChange={([v]) => setCvMotionClipMaxFrames(v)}
+                className="flex-1"
+              />
+              <span className="text-sm font-mono w-16 text-right">{cvMotionClipMaxFrames} frames</span>
+            </div>
+          </Field>
+
+          <Field
+            label="Flipbook playback speed"
+            hint={`${cvFlipbookInterval}ms between frames — ${(1000 / cvFlipbookInterval).toFixed(1)} fps`}
+          >
+            <div className="flex items-center gap-4">
+              <Slider
+                min={200} max={2000} step={100}
+                value={[cvFlipbookInterval]}
+                onValueChange={([v]) => setCvFlipbookInterval(v)}
+                className="flex-1"
+              />
+              <span className="text-sm font-mono w-24 text-right">{cvFlipbookInterval}ms</span>
+            </div>
+          </Field>
         </CardContent>
       </Card>
 

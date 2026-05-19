@@ -493,6 +493,8 @@ export const appRouter = router({
         clearOnStart:             z.boolean().optional(),
         testMode:                 z.boolean().optional(),
         notificationPreferences:  z.any().optional(),
+        cvMotionClipMaxFrames:    z.number().optional(),
+        cvFlipbookInterval:       z.number().optional(),
       }))
       .mutation(async ({ input }) => {
         const data: any = {};
@@ -501,6 +503,8 @@ export const appRouter = router({
         if (input.clearOnStart            !== undefined) data.clearOnStart            = input.clearOnStart;
         if (input.testMode                !== undefined) data.testMode                = input.testMode;
         if (input.notificationPreferences !== undefined) data.notificationPreferences = input.notificationPreferences;
+        if (input.cvMotionClipMaxFrames   !== undefined) data.cvMotionClipMaxFrames   = input.cvMotionClipMaxFrames;
+        if (input.cvFlipbookInterval      !== undefined) data.cvFlipbookInterval      = input.cvFlipbookInterval;
         return db.updateSettings(data);
       }),
     
@@ -641,12 +645,13 @@ export const appRouter = router({
   movements: router({
     list: protectedProcedure
       .input(z.object({
-        limit:     z.number().default(100),
-        cameraId:  z.number().optional(),
-        zoneId:    z.number().optional(),
-        alertId:   z.number().optional(),
-        startDate: z.string().optional(),
-        endDate:   z.string().optional(),
+        limit:         z.number().default(100),
+        cameraId:      z.number().optional(),
+        zoneId:        z.number().optional(),
+        alertId:       z.number().optional(),
+        startDate:     z.string().optional(),
+        endDate:       z.string().optional(),
+        detectionType: z.enum(["FACE", "BODY", "MOTION"]).optional(),
       }))
       .query(async ({ input }) => {
         return db.getMovements(input);

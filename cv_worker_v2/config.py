@@ -57,6 +57,12 @@ ENCODING_DEDUP_WINDOW_SEC = 5      # Short DB encoding-dedup window: suppresses 
 CV_FRAME_QUEUE_SIZE_DEFAULT  = 500  # Bounded frame queue — larger buffer for GPU throughput
 CV_DETECTION_WORKERS_DEFAULT = 2    # Reduced to 2 workers to stay within 256-PID cgroup limit on Vast.ai
 
+# ─── Motion clip recording ────────────────────────────────────────────────────
+MOTION_CLIP_MAX_FRAMES  = 20   # max frames saved per movement
+MOTION_CLIP_EVERY_N     = 2    # save 1 frame every N detections (was 3)
+# With frame_analysis_interval=150ms and every_n=2:
+# → 1 frame every 300ms → 20 frames = 6 seconds of motion
+
 # ─── Identity reload ──────────────────────────────────────────────────────────
 IDENTITY_RELOAD_SEC   = 3           # Reload persons table every N seconds (low enough to catch newly-created unknowns before next detection)
 CAMERA_RELOAD_SEC     = 30          # Reload cameras table every N seconds

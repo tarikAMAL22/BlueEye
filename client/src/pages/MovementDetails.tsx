@@ -6,8 +6,6 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ArrowLeft, Film, Users, AlertCircle, Play, Pause, SkipBack, SkipForward, Clock, RefreshCw, Settings } from "lucide-react";
 
-const FLIPBOOK_FPS = 8;
-
 function sortClipUrls(urls: string[]): string[] {
   const tsOf = (u: string) => {
     const m = u.match(/clip_(\d{13})_/);
@@ -16,11 +14,12 @@ function sortClipUrls(urls: string[]): string[] {
   return [...urls].sort((a, b) => tsOf(a) - tsOf(b) || a.localeCompare(b));
 }
 
-function FlipbookPlayer({ urls, autoPlay = false, bestFrameIdx, faceCropUrl }: {
+function FlipbookPlayer({ urls, autoPlay = false, bestFrameIdx, faceCropUrl, intervalMs = 500 }: {
   urls: string[];
   autoPlay?: boolean;
   bestFrameIdx?: number;
   faceCropUrl?: string;
+  intervalMs?: number;
 }) {
   const [idx, setIdx]         = useState(0);
   const [playing, setPlaying] = useState(autoPlay);
@@ -34,9 +33,9 @@ function FlipbookPlayer({ urls, autoPlay = false, bestFrameIdx, faceCropUrl }: {
   const play = useCallback(() => {
     stop();
     if (urls.length < 2) return;
-    intervalRef.current = setInterval(() => setIdx(i => (i + 1) % urls.length), 1000 / FLIPBOOK_FPS);
+    intervalRef.current = setInterval(() => setIdx(i => (i + 1) % urls.length), intervalMs);
     setPlaying(true);
-  }, [urls.length, stop]);
+  }, [urls.length, stop, intervalMs]);
 
   const pause = useCallback(() => { stop(); setPlaying(false); }, [stop]);
 
@@ -101,6 +100,8 @@ export default function MovementDetails() {
   const { data: movement, isLoading } = trpc.movements.getById.useQuery({ id: movId }, { enabled: !!movId });
   const { data: camerasList } = trpc.cameras.list.useQuery();
   const { data: zonesList }   = trpc.zones.list.useQuery();
+  const { data: settingsData } = trpc.settings.get.useQuery();
+  const flipbookIntervalMs = (settingsData as any)?.cvFlipbookInterval ?? 500;
 
   const getCameraName = (id: number) => camerasList?.find((c: any) => c.id === id)?.name ?? `Camera #${id}`;
   const getZoneName   = (id: number) => zonesList?.find((z: any) => z.id === id)?.name   ?? `Zone #${id}`;
@@ -181,6 +182,7 @@ export default function MovementDetails() {
               autoPlay
               bestFrameIdx={bestIdx}
               faceCropUrl={(movement as any).faceCropUrl ?? undefined}
+              intervalMs={flipbookIntervalMs}
             />
           </div>
         </div>
@@ -212,6 +214,20 @@ export default function MovementDetails() {
             <div className="p-4 rounded-xl bg-muted/30 border border-border/30">
               <div className="text-xs text-muted-foreground mb-1">Tracker ID</div>
               <div className="font-bold font-mono text-xs truncate">{(movement as any).trackerId}</div>
+            </div>
+            <div className="p-4 rounded-xl bg-muted/30 border border-border/30 col-span-2">
+              <div className="text-xs text-muted-foreground mb-2">Detection Type</div>
+              <div className="flex items-center gap-2">
+                {(movement as any).detectionType === "FACE" && (
+                  <Badge className="bg-green-600 text-white">👤 Face Detected</Badge>
+                )}
+                {(movement as any).detectionType === "BODY" && (
+                  <Badge className="bg-orange-600 text-white">🚶 Body Only</Badge>
+                )}
+                {((!movement || (movement as any).detectionType === "MOTION" || !(movement as any).detectionType)) && (
+                  <Badge variant="outline">🎥 Motion Only</Badge>
+                )}
+              </div>
             </div>
           </div>
 

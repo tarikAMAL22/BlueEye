@@ -233,13 +233,14 @@ def create_movement(
     face_count: int,
     frame_count: int,
     alert_id: Optional[int] = None,
+    detection_type: str = "MOTION",
 ) -> int:
     """Insert a row into `movements` and return its id."""
     sql = """
         INSERT INTO movements
             (cameraId, zoneId, trackerId, frameUrls, bestFrameUrl, faceCropUrl,
-             faceCount, frameCount, alertId, createdAt)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             faceCount, frameCount, alertId, detectionType, createdAt)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """
     now = datetime.datetime.utcnow()
     with get_connection() as conn:
@@ -247,7 +248,7 @@ def create_movement(
             cur.execute(sql, (
                 camera_id, zone_id, tracker_id,
                 json.dumps(frame_urls), best_frame_url, face_crop_url,
-                face_count, frame_count, alert_id, now,
+                face_count, frame_count, alert_id, detection_type, now,
             ))
             movement_id = cur.lastrowid
         conn.commit()
