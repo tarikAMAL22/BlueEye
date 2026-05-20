@@ -47,6 +47,16 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 face_lock    = threading.Lock()
 stop_signals: dict = {}   # cam_id → True  (set True to stop that camera thread)
 
+def _running_in_docker():
+    try:
+        with open('/proc/1/cgroup') as f:
+            content = f.read()
+            return 'docker' in content or 'containerd' in content or 'lxc' in content
+    except Exception:
+        return False
+
+_IS_DOCKER = _running_in_docker()
+
 # ── YOLO person detector (lazy, thread-safe) ──────────────────────────────────
 _yolo_model = None
 _yolo_lock  = threading.Lock()
@@ -798,7 +808,7 @@ def process_camera(cam, matcher):
         logger.error(f"[{cam_name}] has no URL — skipping")
         return
 
-    if "localhost" in backend_url or "127.0.0.1" in backend_url:
+    if _IS_DOCKER and ("localhost" in backend_url or "127.0.0.1" in backend_url):
         backend_url = (backend_url
                        .replace("localhost", "host.docker.internal")
                        .replace("127.0.0.1", "host.docker.internal"))
