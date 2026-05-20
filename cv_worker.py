@@ -350,7 +350,7 @@ def handle_zone_entry(person_id, zone_id, camera_id, global_track_id, conn, curs
     try:
         if person_id:
             _safe_exec(cursor, conn, """
-                SELECT ar.allowed FROM access_rules ar
+                SELECT ar.allowed FROM accessRules ar
                 WHERE ar.personId = %s AND ar.zoneId = %s LIMIT 1
             """, (person_id, zone_id))
             rule = cursor.fetchone()
