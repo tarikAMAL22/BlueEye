@@ -953,7 +953,7 @@ def process_camera(cam, matcher):
                 did_upgrade = False
 
                 # ── LAYER 3: Face recognition (only when face found) ──────
-                if det_type in ('face_visible', 'partial_face') and face_crop is not None:
+                if det_type in ('face', 'partial_face') and face_crop is not None:
                     pid_new, conf_new, role_new, tier_new, enc_new = _recognize_face(face_crop, matcher)
 
                     # Always record actual confidence + encoding for the alert.
