@@ -1114,11 +1114,20 @@ def main():
             matcher.load()
             conn   = get_db_connection()
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM cameras WHERE status != 'deleted'")
+            cursor.execute("SELECT * FROM cameras WHERE status = 'online'")
             cams = cursor.fetchall()
             cursor.close()
             conn.close()
 
+            online_ids = {cam['id'] for cam in cams}
+
+            # Stop threads for cameras that went offline
+            for cid in list(active_threads.keys()):
+                if cid not in online_ids and active_threads[cid].is_alive():
+                    stop_signals[cid] = True
+                    logger.info(f"Camera {cid} is offline — stopping processor")
+
+            # Start threads for online cameras not yet running
             for cam in cams:
                 cid = cam['id']
                 if cid not in active_threads or not active_threads[cid].is_alive():
