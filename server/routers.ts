@@ -9,6 +9,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import http from "node:http";
 import { ENV } from "./_core/env";
+import { sql } from "drizzle-orm";
 
 export const appRouter = router({
   system: systemRouter,
@@ -764,6 +765,306 @@ export const appRouter = router({
     allMemberships: protectedProcedure.query(async () => {
       return db.getAllPersonGroupMemberships();
     }),
+  }),
+
+  // ============ REPORTS ============
+  reports: router({
+    generate: adminProcedure
+      .input(z.object({
+        period:     z.enum(["daily", "weekly", "monthly"]),
+        entityType: z.enum(["person", "zone"]),
+        entityId:   z.number().optional(),
+        startDate:  z.string(),
+        endDate:    z.string(),
+      }))
+      .query(async ({ input }) => {
+        const drizzleDb = await db.getDb();
+        if (!drizzleDb) throw new Error("DB unavailable");
+
+        const { period, entityType, entityId, startDate, endDate } = input;
+        const start = new Date(startDate);
+        const end   = new Date(endDate);
+
+        const dateExpr =
+          period === "daily"   ? sql`DATE(zv.entryTime)` :
+          period === "weekly"  ? sql`YEARWEEK(zv.entryTime, 1)` :
+                                 sql`DATE_FORMAT(zv.entryTime, '%Y-%m')`;
+
+        const entityFilter = entityId
+          ? (entityType === "person" ? sql`AND zv.personId = ${entityId}` : sql`AND zv.zoneId = ${entityId}`)
+          : sql``;
+
+        const rows = await drizzleDb.execute(sql`
+          SELECT
+            ${dateExpr}           AS period,
+            COUNT(*)              AS totalVisits,
+            SUM(zv.dwellSeconds)  AS totalDwellSeconds,
+            AVG(zv.dwellSeconds)  AS avgDwellSeconds,
+            COUNT(DISTINCT zv.personId) AS uniquePersons,
+            zv.zoneId,
+            z.name                AS zoneName,
+            HOUR(zv.entryTime)    AS peakHourRaw
+          FROM zone_visits zv
+          LEFT JOIN zones z ON z.id = zv.zoneId
+          WHERE zv.entryTime BETWEEN ${start.toISOString()} AND ${end.toISOString()}
+          ${entityFilter}
+          GROUP BY period, zv.zoneId, z.name, peakHourRaw
+          ORDER BY period ASC, totalVisits DESC
+        `);
+
+        const rowArr = rows[0] as any[];
+        const periods = [...new Set(rowArr.map((r: any) => String(r.period)))];
+
+        const zoneBreakdown = rowArr.reduce((acc: any[], r: any) => {
+          const existing = acc.find(x => x.zoneId === r.zoneId);
+          if (existing) {
+            existing.visitCount    += Number(r.totalVisits);
+            existing.totalDwellSec += Number(r.totalDwellSeconds ?? 0);
+          } else {
+            acc.push({ zoneId: r.zoneId, zoneName: r.zoneName, visitCount: Number(r.totalVisits), totalDwellSec: Number(r.totalDwellSeconds ?? 0) });
+          }
+          return acc;
+        }, []);
+
+        const totalVisits   = rowArr.reduce((s: number, r: any) => s + Number(r.totalVisits), 0);
+        const totalDwellSec = rowArr.reduce((s: number, r: any) => s + Number(r.totalDwellSeconds ?? 0), 0);
+        const uniquePersons = [...new Set(rowArr.map((r: any) => r.uniquePersons))].reduce((s: number, v: any) => s + Number(v), 0);
+
+        const hourCounts: Record<number, number> = {};
+        for (const r of rowArr) {
+          const h = Number(r.peakHourRaw);
+          hourCounts[h] = (hourCounts[h] ?? 0) + Number(r.totalVisits);
+        }
+        const peakHour = Object.entries(hourCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+
+        const result = {
+          periods,
+          totalVisits,
+          totalDwellSeconds:  totalDwellSec,
+          avgDwellSeconds:    totalVisits > 0 ? Math.round(totalDwellSec / totalVisits) : 0,
+          uniquePersons,
+          zoneBreakdown,
+          peakHour: peakHour !== null ? Number(peakHour) : null,
+        };
+
+        // Cache result
+        await drizzleDb.execute(sql`
+          INSERT INTO report_cache (reportType, entityType, entityId, periodStart, data, generatedAt)
+          VALUES (${period}, ${entityType}, ${entityId ?? null}, ${start.toISOString()}, ${JSON.stringify(result)}, NOW())
+        `).catch(() => {});
+
+        return result;
+      }),
+  }),
+
+  // ============ ZONE HEATMAP ============
+  // Attached to zones router extension:
+  zoneAnalytics: router({
+    heatmap: adminProcedure
+      .input(z.object({ zoneId: z.number(), period: z.enum(["daily", "weekly", "monthly"]).default("daily") }))
+      .query(async ({ input }) => {
+        const drizzleDb = await db.getDb();
+        if (!drizzleDb) throw new Error("DB unavailable");
+
+        const days = input.period === "daily" ? 1 : input.period === "weekly" ? 7 : 30;
+        const rows = await drizzleDb.execute(sql`
+          SELECT
+            HOUR(entryTime)   AS hour,
+            AVG(dwellSeconds) AS avgDwell,
+            COUNT(*)          AS visitCount
+          FROM zone_visits
+          WHERE zoneId = ${input.zoneId}
+            AND entryTime >= DATE_SUB(NOW(), INTERVAL ${days} DAY)
+          GROUP BY HOUR(entryTime)
+          ORDER BY hour ASC
+        `);
+        const arr = rows[0] as any[];
+        const full: { hour: number; avgDwell: number; visitCount: number }[] = [];
+        const byHour = new Map(arr.map((r: any) => [Number(r.hour), r]));
+        for (let h = 0; h < 24; h++) {
+          const r = byHour.get(h);
+          full.push({ hour: h, avgDwell: r ? Math.round(Number(r.avgDwell ?? 0)) : 0, visitCount: r ? Number(r.visitCount) : 0 });
+        }
+
+        const topRows = await drizzleDb.execute(sql`
+          SELECT zv.personId, p.name, COUNT(*) AS visits
+          FROM zone_visits zv
+          LEFT JOIN persons p ON p.id = zv.personId
+          WHERE zv.zoneId = ${input.zoneId} AND zv.personId IS NOT NULL
+            AND zv.entryTime >= DATE_SUB(NOW(), INTERVAL ${days} DAY)
+          GROUP BY zv.personId, p.name
+          ORDER BY visits DESC
+          LIMIT 10
+        `);
+        return { hourly: full, topVisitors: (topRows[0] as any[]).map((r: any) => ({ personId: r.personId, name: r.name, visits: Number(r.visits) })) };
+      }),
+  }),
+
+  // ============ PERSON TIMELINE ============
+  personAnalytics: router({
+    timeline: adminProcedure
+      .input(z.object({ personId: z.number(), startDate: z.string(), endDate: z.string() }))
+      .query(async ({ input }) => {
+        const drizzleDb = await db.getDb();
+        if (!drizzleDb) throw new Error("DB unavailable");
+
+        const rows = await drizzleDb.execute(sql`
+          SELECT
+            zv.id, zv.zoneId, z.name AS zoneName,
+            c.name AS cameraName, zv.cameraId,
+            zv.entryTime, zv.exitTime,
+            zv.dwellSeconds, zv.accessGranted,
+            zv.globalTrackId
+          FROM zone_visits zv
+          LEFT JOIN zones   z ON z.id = zv.zoneId
+          LEFT JOIN cameras c ON c.id = zv.cameraId
+          WHERE zv.personId = ${input.personId}
+            AND zv.entryTime BETWEEN ${input.startDate} AND ${input.endDate}
+          ORDER BY zv.entryTime ASC
+        `);
+        return (rows[0] as any[]).map((r: any) => ({
+          id:            r.id,
+          zoneId:        r.zoneId,
+          zoneName:      r.zoneName,
+          cameraId:      r.cameraId,
+          cameraName:    r.cameraName,
+          entryTime:     r.entryTime,
+          exitTime:      r.exitTime,
+          dwellSeconds:  r.dwellSeconds !== null ? Number(r.dwellSeconds) : null,
+          accessGranted: Boolean(r.accessGranted),
+          globalTrackId: r.globalTrackId,
+        }));
+      }),
+  }),
+
+  // ============ REVIEW QUEUE + CONFIRM IDENTITY ============
+  reviewQueue: router({
+    list: adminProcedure
+      .input(z.object({ limit: z.number().default(50), offset: z.number().default(0) }))
+      .query(async ({ input }) => {
+        const drizzleDb = await db.getDb();
+        if (!drizzleDb) throw new Error("DB unavailable");
+
+        const rows = await drizzleDb.execute(sql`
+          SELECT
+            a.id, a.personId, a.cameraId, a.zoneId,
+            a.faceSnapshotUrl, a.bestFrameSnapshotUrl,
+            a.confidence, a.threatLevel, a.timestamp,
+            p.name AS personName, p.role AS personRole,
+            c.name AS cameraName, z.name AS zoneName
+          FROM alerts a
+          LEFT JOIN persons p ON p.id = a.personId
+          LEFT JOIN cameras c ON c.id = a.cameraId
+          LEFT JOIN zones   z ON z.id = a.zoneId
+          WHERE a.status = 'pending_review'
+          ORDER BY a.timestamp DESC
+          LIMIT ${input.limit} OFFSET ${input.offset}
+        `);
+        return (rows[0] as any[]);
+      }),
+
+    confirmIdentity: adminProcedure
+      .input(z.object({
+        alertId:           z.number(),
+        confirmedPersonId: z.number().optional(),
+        markUnknown:       z.boolean().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const drizzleDb = await db.getDb();
+        if (!drizzleDb) throw new Error("DB unavailable");
+
+        const newStatus = 'active';
+        if (input.confirmedPersonId) {
+          await drizzleDb.execute(sql`
+            UPDATE alerts SET status = ${newStatus}, personId = ${input.confirmedPersonId}
+            WHERE id = ${input.alertId}
+          `);
+          // Log identity correction event
+          const alertRow = await drizzleDb.execute(sql`
+            SELECT cameraId, zoneId, faceSnapshotUrl, bestFrameSnapshotUrl, confidence
+            FROM alerts WHERE id = ${input.alertId}
+          `);
+          const a = (alertRow[0] as any[])[0];
+          if (a) {
+            await drizzleDb.execute(sql`
+              INSERT INTO events (personId, alertId, cameraId, zoneId, faceSnapshotUrl, bestFrameSnapshotUrl, confidence, eventType)
+              VALUES (${input.confirmedPersonId}, ${input.alertId}, ${a.cameraId}, ${a.zoneId}, ${a.faceSnapshotUrl}, ${a.bestFrameSnapshotUrl}, ${a.confidence}, 'identity_correction')
+            `);
+          }
+        } else {
+          await drizzleDb.execute(sql`
+            UPDATE alerts SET status = ${newStatus} WHERE id = ${input.alertId}
+          `);
+        }
+        return { success: true };
+      }),
+  }),
+
+  // ============ PERSONS — ADDITIONAL PROCEDURES ============
+  personsExtra: router({
+    addEncoding: adminProcedure
+      .input(z.object({ personId: z.number(), photoBase64: z.string() }))
+      .mutation(async ({ input }) => {
+        const drizzleDb = await db.getDb();
+        if (!drizzleDb) throw new Error("DB unavailable");
+
+        // Save photo
+        const matches = input.photoBase64.match(/^data:image\/([A-Za-z-+\/]+);base64,(.+)$/);
+        if (!matches) throw new Error("Invalid base64 image");
+        const ext      = matches[1] === 'jpeg' ? 'jpg' : matches[1];
+        const buffer   = Buffer.from(matches[2], "base64");
+        const filename = `face_angle_${crypto.randomUUID()}.${ext}`;
+        const uploadDir = path.join(process.cwd(), "client/public/uploads");
+        if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+        fs.writeFileSync(path.join(uploadDir, filename), buffer);
+        const photoUrl = `/uploads/${filename}`;
+
+        // Update photoUrl for person if not set; use CV worker to get encoding
+        await drizzleDb.execute(sql`
+          UPDATE persons SET photoUrl = COALESCE(photoUrl, ${photoUrl}) WHERE id = ${input.personId}
+        `);
+
+        // Call CV worker to encode and append
+        let encodingCount = 1;
+        try {
+          const resp = await fetch(`${ENV.cvWorkerUrl}/api/encode-person-angle`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ personId: input.personId, photoUrl }),
+          });
+          if (resp.ok) {
+            const data = await resp.json() as any;
+            encodingCount = data.encodingCount ?? 1;
+          }
+        } catch (e) {
+          // CV worker not reachable — encoding will be triggered on next worker run
+        }
+
+        return { photoUrl, encodingCount };
+      }),
+
+    encodingCount: adminProcedure
+      .input(z.object({ personId: z.number() }))
+      .query(async ({ input }) => {
+        const drizzleDb = await db.getDb();
+        if (!drizzleDb) return { count: 0 };
+        const rows = await drizzleDb.execute(sql`
+          SELECT faceEncoding, faceEncodings FROM persons WHERE id = ${input.personId}
+        `);
+        const r = (rows[0] as any[])[0];
+        if (!r) return { count: 0 };
+        let count = 0;
+        // Count multi-angle encodings array
+        if (r.faceEncodings) {
+          try {
+            const enc = typeof r.faceEncodings === 'string' ? JSON.parse(r.faceEncodings) : r.faceEncodings;
+            if (Array.isArray(enc)) count = enc.length;
+          } catch { /* ignore */ }
+        }
+        // If no multi-encodings, count the single faceEncoding
+        if (count === 0 && r.faceEncoding) count = 1;
+        return { count };
+      }),
   }),
 });
 

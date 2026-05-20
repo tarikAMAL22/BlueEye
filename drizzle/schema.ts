@@ -1,4 +1,4 @@
-import { decimal, int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, json } from "drizzle-orm/mysql-core";
+import { decimal, int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, json, float } from "drizzle-orm/mysql-core";
 
 /**
  * Core user table backing auth flow.
@@ -68,6 +68,7 @@ export const persons = mysqlTable("persons", {
   role: varchar("role", { length: 255 }).notNull(),
   photoUrl: varchar("photoUrl", { length: 512 }),
   faceEncoding: json("faceEncoding").$type<number[]>(),
+  faceEncodings: json("faceEncodings").$type<number[][]>(),
   isBlacklisted: boolean("isBlacklisted").default(false).notNull(),
   zonePermissions: json("zonePermissions").$type<{ zoneId: number; allowed: boolean }[]>(),
   activityHistory: json("activityHistory").$type<{ timestamp: number; action: string }[]>(),
@@ -89,7 +90,7 @@ export const alerts = mysqlTable("alerts", {
   faceSnapshotUrl: varchar("faceSnapshotUrl", { length: 512 }),
   bestFrameSnapshotUrl: varchar("bestFrameSnapshotUrl", { length: 512 }),
   confidence: decimal("confidence", { precision: 5, scale: 2 }).notNull(),
-  status: mysqlEnum("status", ["active", "acknowledged", "escalated", "dismissed"]).default("active").notNull(),
+  status: mysqlEnum("status", ["active", "acknowledged", "escalated", "dismissed", "pending_review"]).default("active").notNull(),
   threatLevel: mysqlEnum("threatLevel", ["low", "medium", "high", "critical"]).default("medium").notNull(),
   detectionType: mysqlEnum("detectionType", ["FACE", "NO_FACE"]).default("FACE").notNull(),
   faceQuality: mysqlEnum("faceQuality", ["CLEAR", "UNCLEAR", "NO_FACE"]).default("CLEAR").notNull(),
@@ -268,3 +269,80 @@ export const settings = mysqlTable("settings", {
 
 export type Setting = typeof settings.$inferSelect;
 export type InsertSetting = typeof settings.$inferInsert;
+
+/**
+ * ZoneVisits table: per-visit dwell tracking per person per zone
+ */
+export const zoneVisits = mysqlTable("zone_visits", {
+  id: int("id").autoincrement().primaryKey(),
+  personId: int("personId"),
+  zoneId: int("zoneId").notNull(),
+  globalTrackId: varchar("globalTrackId", { length: 36 }),
+  cameraId: int("cameraId").notNull(),
+  entryTime: timestamp("entryTime").defaultNow().notNull(),
+  exitTime: timestamp("exitTime"),
+  dwellSeconds: int("dwellSeconds"),
+  accessGranted: boolean("accessGranted").default(true).notNull(),
+});
+
+export type ZoneVisit = typeof zoneVisits.$inferSelect;
+export type InsertZoneVisit = typeof zoneVisits.$inferInsert;
+
+/**
+ * PersonTracks table: cross-camera journey tracking for a single visit
+ */
+export const personTracks = mysqlTable("person_tracks", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  personId: int("personId"),
+  startTime: timestamp("startTime").defaultNow().notNull(),
+  endTime: timestamp("endTime"),
+  camerasVisited: json("camerasVisited").$type<{ camId: number; zoneId: number; timestamp: string }[]>(),
+  clothingHistogram: json("clothingHistogram").$type<number[]>(),
+});
+
+export type PersonTrack = typeof personTracks.$inferSelect;
+export type InsertPersonTrack = typeof personTracks.$inferInsert;
+
+/**
+ * AccessLogs table: per-access decision audit trail
+ */
+export const accessLogs = mysqlTable("access_logs", {
+  id: int("id").autoincrement().primaryKey(),
+  personId: int("personId"),
+  zoneId: int("zoneId").notNull(),
+  cameraId: int("cameraId").notNull(),
+  timestamp: timestamp("timestamp").defaultNow().notNull(),
+  decision: mysqlEnum("decision", ["allowed", "denied"]).notNull(),
+  reason: text("reason"),
+});
+
+export type AccessLog = typeof accessLogs.$inferSelect;
+export type InsertAccessLog = typeof accessLogs.$inferInsert;
+
+/**
+ * ReportCache table: cached aggregated report data
+ */
+export const reportCache = mysqlTable("report_cache", {
+  id: int("id").autoincrement().primaryKey(),
+  reportType: mysqlEnum("reportType", ["daily", "weekly", "monthly"]).notNull(),
+  entityType: mysqlEnum("entityType", ["person", "zone"]).notNull(),
+  entityId: int("entityId"),
+  periodStart: timestamp("periodStart").notNull(),
+  data: json("data"),
+  generatedAt: timestamp("generatedAt").defaultNow().notNull(),
+});
+
+export type ReportCache = typeof reportCache.$inferSelect;
+
+/**
+ * CameraPairs table: max transit time between camera pairs for ReID
+ */
+export const cameraPairs = mysqlTable("camera_pairs", {
+  id: int("id").autoincrement().primaryKey(),
+  camAId: int("cam_a_id").notNull(),
+  camBId: int("cam_b_id").notNull(),
+  maxTransitSeconds: int("max_transit_seconds").notNull().default(120),
+  distanceMeters: decimal("distance_meters", { precision: 8, scale: 2 }),
+});
+
+export type CameraPair = typeof cameraPairs.$inferSelect;

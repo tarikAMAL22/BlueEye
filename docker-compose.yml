@@ -1,4 +1,11 @@
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: blueeye-redis
+    restart: unless-stopped
+    networks:
+      - blueeye-network
+
   db:
     image: mysql:8.0
     restart: always
@@ -57,8 +64,15 @@ services:
       - DB_USER=root
       - DB_PASSWORD=my-secret-pw
       - DB_NAME=blueeye
+      - REID_TIME_WINDOW_SECONDS=120
+      - BLUR_THRESHOLD=80
+      - FACE_MATCH_HIGH=0.35
+      - FACE_MATCH_MED=0.45
+      - USE_CNN_DETECTOR=false
+      - USE_YOLO_DETECTOR=true
     depends_on:
       - db
+      - redis
     restart: unless-stopped
     shm_size: '2gb'
     deploy:

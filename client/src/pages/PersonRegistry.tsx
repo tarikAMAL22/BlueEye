@@ -11,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Plus, Edit, Trash2, User, Shield, Eye, Sparkles,
   Search, Fingerprint, Ghost, CheckCircle2, AlertTriangle,
-  UserCheck, X,
+  UserCheck, X, Camera, Clock,
 } from "lucide-react";
 import { useForm, Controller } from "react-hook-form";
 import { toast } from "sonner";
@@ -20,9 +20,11 @@ import { Switch } from "@/components/ui/switch";
 
 export default function PersonRegistry() {
   const [, setLocation] = useLocation();
-  const [showForm,   setShowForm]   = useState(false);
-  const [editingId,  setEditingId]  = useState<number | null>(null);
-  const [photoBase64, setPhotoBase64] = useState<string>("");
+  const [showForm,     setShowForm]     = useState(false);
+  const [editingId,    setEditingId]    = useState<number | null>(null);
+  const [photoBase64,  setPhotoBase64]  = useState<string>("");
+  const [anglePersonId, setAnglePersonId] = useState<number | null>(null);
+  const [angleBase64,  setAngleBase64]  = useState<string>("");
   const [knownSearch,   setKnownSearch]   = useState("");
   const [unknownSearch, setUnknownSearch] = useState("");
 
@@ -45,9 +47,10 @@ export default function PersonRegistry() {
     }
     return map;
   }, [allMemberships]);
-  const createMutation = trpc.persons.create.useMutation();
-  const updateMutation = trpc.persons.update.useMutation();
-  const deleteMutation = trpc.persons.delete.useMutation();
+  const createMutation      = trpc.persons.create.useMutation();
+  const updateMutation      = trpc.persons.update.useMutation();
+  const deleteMutation      = trpc.persons.delete.useMutation();
+  const addEncodingMutation = trpc.personsExtra.addEncoding.useMutation();
 
   const onSubmit = async (data: any) => {
     try {
@@ -291,11 +294,20 @@ export default function PersonRegistry() {
                           </TableCell>
                           <TableCell className="font-semibold text-foreground/90">
                             <div className="flex flex-col">
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
                                 {person.name}
                                 {person.isBlacklisted && (
                                   <Badge variant="destructive" className="text-[10px] h-4 px-1 animate-pulse">BLACKLISTED</Badge>
                                 )}
+                                {/* Multi-encoding count badge */}
+                                {(() => {
+                                  const count = Array.isArray(person.faceEncodings) ? person.faceEncodings.length : (person.faceEncoding ? 1 : 0);
+                                  return count > 0 ? (
+                                    <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-cyan-500/30 text-cyan-400">
+                                      <Fingerprint className="w-2.5 h-2.5 mr-0.5" /> {count}/5
+                                    </Badge>
+                                  ) : null;
+                                })()}
                               </div>
                               <span className="text-[10px] text-muted-foreground uppercase tracking-widest mt-0.5">#{person.id}</span>
                             </div>
@@ -329,6 +341,12 @@ export default function PersonRegistry() {
                           </TableCell>
                           <TableCell className="text-right pr-6">
                             <div className="flex gap-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                              <Button size="icon" variant="ghost" onClick={() => setLocation(`/persons/${person.id}/timeline`)} className="h-8 w-8 text-cyan-400 hover:text-cyan-300 hover:bg-cyan-400/10" title="View timeline">
+                                <Clock className="w-4 h-4" />
+                              </Button>
+                              <Button size="icon" variant="ghost" onClick={() => { setAnglePersonId(person.id); setAngleBase64(""); }} className="h-8 w-8 text-green-400 hover:text-green-300 hover:bg-green-400/10" title="Add photo angle">
+                                <Camera className="w-4 h-4" />
+                              </Button>
                               <Button size="icon" variant="ghost" onClick={() => setLocation(`/persons/${person.id}`)} className="h-8 w-8 text-blue-400 hover:text-blue-300 hover:bg-blue-400/10">
                                 <Eye className="w-4 h-4" />
                               </Button>
@@ -512,6 +530,81 @@ export default function PersonRegistry() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      {/* Add Photo Angle dialog */}
+      {anglePersonId !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+          <Card className="w-96 border-border/60 bg-card/95">
+            <CardContent className="p-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold flex items-center gap-2">
+                  <Camera className="w-4 h-4 text-green-400" /> Add Photo Angle
+                </h3>
+                <Button size="icon" variant="ghost" onClick={() => { setAnglePersonId(null); setAngleBase64(""); }}>
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Upload an additional face angle to improve recognition accuracy (max 5 total).
+              </p>
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                id="angle-upload"
+                onChange={e => {
+                  const file = e.target.files?.[0];
+                  if (file) {
+                    const reader = new FileReader();
+                    reader.onloadend = () => setAngleBase64(reader.result as string);
+                    reader.readAsDataURL(file);
+                  }
+                }}
+              />
+              {angleBase64 ? (
+                <img src={angleBase64} className="w-full h-40 object-contain rounded border border-border/50" alt="preview" />
+              ) : (
+                <label
+                  htmlFor="angle-upload"
+                  className="flex flex-col items-center justify-center h-32 border border-dashed border-green-500/30 rounded-lg cursor-pointer hover:bg-green-500/5 transition-colors"
+                >
+                  <Camera className="w-8 h-8 text-green-400/50 mb-2" />
+                  <span className="text-xs text-muted-foreground">Click to select image</span>
+                </label>
+              )}
+              {angleBase64 && (
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    className="flex-1 bg-green-500/20 text-green-400 border-green-500/30 hover:bg-green-500/30"
+                    variant="outline"
+                    disabled={addEncodingMutation.isPending}
+                    onClick={async () => {
+                      try {
+                        const result = await addEncodingMutation.mutateAsync({
+                          personId: anglePersonId!,
+                          photoBase64: angleBase64,
+                        });
+                        toast.success(`Angle added (${result.encodingCount}/5 total)`);
+                        setAnglePersonId(null);
+                        setAngleBase64("");
+                        refetch();
+                      } catch (e: any) {
+                        toast.error(`Failed: ${e.message}`);
+                      }
+                    }}
+                  >
+                    {addEncodingMutation.isPending ? "Saving…" : "Save Angle"}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setAngleBase64("")}>
+                    <X className="w-3 h-3" />
+                  </Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }

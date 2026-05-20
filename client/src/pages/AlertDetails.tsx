@@ -11,7 +11,7 @@ import { Slider } from "@/components/ui/slider";
 import {
   ArrowLeft, AlertCircle, CheckCircle, AlertTriangle, User, History,
   Video, UserPlus, Link as LinkIcon, Scan, Sparkles, Users, Clapperboard,
-  RefreshCw, Search,
+  RefreshCw, Search, GitBranch,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -247,10 +247,13 @@ export default function AlertDetails() {
     );
   }
 
-  const isNoFace = alert.detectionType === 'NO_FACE'
-    || alert.faceQuality === 'NO_FACE'
-    || (!alert.personId && !alert.confidence);
-  const isBodyOnly = isNoFace || !!(alert.metadata as any)?.bodyOnlyDetection;
+  // Primary detection wins: detectionType=FACE means a face WAS found,
+  // even if deep_analyzer (HOG fallback) later reported faceCount=0.
+  const isNoFace = alert.detectionType !== 'FACE'
+    && (alert.detectionType === 'NO_FACE'
+      || alert.faceQuality === 'NO_FACE'
+      || (!alert.personId && !alert.confidence));
+  const isBodyOnly = isNoFace || (!!(alert.metadata as any)?.bodyOnlyDetection && alert.detectionType !== 'FACE');
   const isUnknown = !isNoFace && !isBodyOnly && (!alert.personId
     || getPersonName(alert.personId).toLowerCase().includes("unknown")
     || getPersonRole(alert.personId) === "UNKNOWN");
@@ -277,6 +280,21 @@ export default function AlertDetails() {
           </Button>
         </div>
       </div>
+
+      {/* Secondary detection notice */}
+      {(alert.metadata as any)?.secondaryDetection && (alert.metadata as any)?.primaryAlertId && (
+        <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-blue-600/10 border border-blue-500/30 text-blue-300 text-sm">
+          <GitBranch className="w-4 h-4 flex-shrink-0 text-blue-400" />
+          <span className="font-semibold uppercase text-[11px] tracking-wide">Secondary Detection</span>
+          <span className="text-muted-foreground text-xs">—</span>
+          <span className="text-xs text-muted-foreground">Second body detected in the same frame as primary alert</span>
+          <WouterLink href={`/alerts/${(alert.metadata as any).primaryAlertId}`}
+            className="ml-auto flex items-center gap-1.5 text-xs font-bold text-blue-400 hover:text-blue-300 hover:underline transition-colors flex-shrink-0">
+            <LinkIcon className="w-3.5 h-3.5" />
+            View Primary Alert #{(alert.metadata as any).primaryAlertId}
+          </WouterLink>
+        </div>
+      )}
 
       {/* Content Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
@@ -324,7 +342,10 @@ export default function AlertDetails() {
             {(() => {
               const meta = alert.metadata as any;
               const urls: string[] = meta?.detectedFaceUrls ?? [];
-              const count: number  = meta?.faceCount ?? 0;
+              // Trust primary detection: if detectionType=FACE, at least 1 face was found
+              // even if the deep_analyzer (HOG fallback) missed it on re-check.
+              const rawCount: number = meta?.faceCount ?? 0;
+              const count: number = alert.detectionType === 'FACE' ? Math.max(1, rawCount) : rawCount;
               if (!meta) return null;
               return (
                 <div className="mt-2 space-y-2">

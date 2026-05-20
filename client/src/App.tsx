@@ -21,6 +21,10 @@ import AlertDetails from "./pages/AlertDetails";
 import MovementDetails from "./pages/MovementDetails";
 import ManageUnknownReview from "./pages/ManageUnknownReview";
 import AccessGroups from "./pages/AccessGroups";
+import Reports from "./pages/Reports";
+import PersonTimeline from "./pages/PersonTimeline";
+import ZoneHeatmap from "./pages/ZoneHeatmap";
+import ReviewQueue from "./pages/ReviewQueue";
 import { useAuth } from "./_core/hooks/useAuth";
 
 function Router() {
@@ -64,11 +68,15 @@ function Router() {
         {/* Admin-only routes */}
         <Route path={"/persons"}>{isAdmin ? <PersonRegistry /> : <Forbidden />}</Route>
         <Route path={"/persons/review"}>{isAdmin ? <ManageUnknownReview /> : <Forbidden />}</Route>
+        <Route path={"/persons/:id/timeline"}>{isAdmin ? <PersonTimeline /> : <Forbidden />}</Route>
         <Route path={"/persons/:id"}>{isAdmin ? <PersonDetails /> : <Forbidden />}</Route>
         <Route path={"/cameras"}>{isAdmin ? <CameraManagement /> : <Forbidden />}</Route>
         <Route path={"/zones"}>{isAdmin ? <ZoneManagement /> : <Forbidden />}</Route>
+        <Route path={"/zones/:id/heatmap"}>{isAdmin ? <ZoneHeatmap /> : <Forbidden />}</Route>
         <Route path={"/blacklist"}>{isAdmin ? <BlacklistManagement /> : <Forbidden />}</Route>
         <Route path={"/access-groups"}>{isAdmin ? <AccessGroups /> : <Forbidden />}</Route>
+        <Route path={"/reports"}>{isAdmin ? <Reports /> : <Forbidden />}</Route>
+        <Route path={"/review-queue"}>{isAdmin ? <ReviewQueue /> : <Forbidden />}</Route>
         <Route path={"/settings"}>{isAdmin ? <SystemSettings /> : <Forbidden />}</Route>
         
         <Route path={"/404"} component={NotFound} />
