@@ -767,6 +767,12 @@ def _recognize_face(face_crop, matcher):
     if face_crop.shape[0] < 20 or face_crop.shape[1] < 20:
         return None, 0, None, 'unknown', None
 
+    # Upscale small crops so dlib can produce a reliable encoding
+    if face_crop.shape[0] < 80:
+        scale    = 80 / face_crop.shape[0]
+        face_crop = cv2.resize(face_crop, (int(face_crop.shape[1] * scale), 80),
+                               interpolation=cv2.INTER_LANCZOS4)
+
     gray = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY)
     if cv2.Laplacian(gray, cv2.CV_64F).var() < BLUR_THRESHOLD:
         return None, 0, None, 'unknown', None
@@ -775,7 +781,7 @@ def _recognize_face(face_crop, matcher):
     try:
         with face_lock:
             enc_list = face_recognition.face_encodings(
-                rgb, [(0, rgb.shape[1], rgb.shape[0], 0)]
+                rgb, [(0, rgb.shape[1], rgb.shape[0], 0)], num_jitters=1
             )
     except Exception as e:
         logger.debug(f"face_encodings failed: {e}")
