@@ -8,13 +8,13 @@ import cv2
 import time
 import os
 import uuid
-import mysql.connector
+import pymysql
+import pymysql.cursors
 import logging
 import threading
 import numpy as np
 import face_recognition
 import json
-from scipy.spatial.distance import cosine as cosine_distance
 
 logging.basicConfig(
     level=logging.INFO,
@@ -130,7 +130,7 @@ def _config_reload_loop():
         time.sleep(30)
         try:
             conn   = get_db_connection()
-            cursor = conn.cursor(dictionary=True)
+            cursor = conn.cursor()
             load_cv_config_from_db(cursor)
             cursor.close()
             conn.close()
@@ -142,8 +142,10 @@ def _config_reload_loop():
 def get_db_connection():
     while True:
         try:
-            return mysql.connector.connect(
-                host=DB_HOST, user=DB_USER, password=DB_PASSWORD, database=DB_NAME
+            return pymysql.connect(
+                host=DB_HOST, user=DB_USER, password=DB_PASSWORD, database=DB_NAME,
+                cursorclass=pymysql.cursors.DictCursor,
+                autocommit=False,
             )
         except Exception as e:
             logger.warning(f"DB connect failed: {e}, retrying in 5 s...")
@@ -155,11 +157,11 @@ def _safe_exec(cursor, conn, sql, params=()):
     try:
         cursor.execute(sql, params)
         return cursor
-    except mysql.connector.OperationalError as e:
+    except pymysql.err.OperationalError as e:
         logger.warning(f"DB operational error, reconnecting: {e}")
         try:
-            conn.reconnect(attempts=3, delay=2)
-            cursor = conn.cursor(dictionary=True)
+            conn.ping(reconnect=True)
+            cursor = conn.cursor()
             cursor.execute(sql, params)
             return cursor
         except Exception as e2:
@@ -285,7 +287,10 @@ class ReIdEngine:
             app_score = 0.0
             if appearance is not None and d['appearance'] is not None:
                 try:
-                    app_score = max(0.0, 1.0 - float(cosine_distance(appearance, d['appearance'])))
+                    a, b = appearance, d['appearance']
+                    denom = np.linalg.norm(a) * np.linalg.norm(b)
+                    cos_sim = float(np.dot(a, b) / denom) if denom > 0 else 0.0
+                    app_score = max(0.0, cos_sim)
                 except Exception:
                     pass
             time_score = max(0.0, 1.0 - (now - d['ts']) / max(max_trans, 1))
@@ -312,7 +317,7 @@ def _load_camera_pairs():
     global _camera_pairs_map
     try:
         conn   = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
+        cursor = conn.cursor()
         cursor.execute("SELECT cam_a_id, cam_b_id, max_transit_seconds FROM camera_pairs")
         rows = cursor.fetchall()
         cursor.close()
@@ -430,7 +435,7 @@ class FaceMatcher:
             return
         try:
             conn   = get_db_connection()
-            cursor = conn.cursor(dictionary=True)
+            cursor = conn.cursor()
             cursor.execute(
                 "SELECT id, role, faceEncoding, faceEncodings FROM persons "
                 "WHERE faceEncoding IS NOT NULL OR faceEncodings IS NOT NULL"
@@ -799,7 +804,7 @@ def process_camera(cam, matcher):
                        .replace("127.0.0.1", "host.docker.internal"))
 
     conn   = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
+    cursor = conn.cursor()
     zone_threat = _get_zone_threat(zone_id, cursor, conn)
 
     # ── Per-camera state (Bug 3 fix: nothing shared between threads) ──────────
@@ -1072,7 +1077,7 @@ def main():
 
     try:
         conn   = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
+        cursor = conn.cursor()
         load_cv_config_from_db(cursor)
         cursor.close()
         conn.close()
@@ -1100,7 +1105,7 @@ def main():
         try:
             matcher.load()
             conn   = get_db_connection()
-            cursor = conn.cursor(dictionary=True)
+            cursor = conn.cursor()
             cursor.execute("SELECT * FROM cameras WHERE status != 'deleted'")
             cams = cursor.fetchall()
             cursor.close()
