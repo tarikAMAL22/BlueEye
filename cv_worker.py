@@ -453,6 +453,7 @@ class FaceMatcher:
             self.known_ids          = ids
             self.known_roles        = roles
             self.last_load          = time.time()
+            logger.info(f"FaceMatcher: loaded {len(enc)} person(s)")
         except Exception as e:
             logger.warning(f"FaceMatcher load failed: {e}")
 
@@ -940,6 +941,9 @@ def process_camera(cam, matcher):
 
                 # ── Classify detection ────────────────────────────────────
                 det_type, face_crop, _ = _classify_detection(frame, x1, y1, x2, y2)
+                # Normalise to DB column values: 'face_visible' → 'face'
+                if det_type == 'face_visible':
+                    det_type = 'face'
 
                 person_id  = tdata['person_id']
                 confidence = 0
