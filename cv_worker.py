@@ -47,8 +47,8 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 face_lock    = threading.Lock()
 stop_signals: dict = {}   # cam_id → True  (set True to stop that camera thread)
 
-# True only inside a real Docker container (/.dockerenv is created by Docker, not LXC/Vast.ai)
-_IS_DOCKER = os.path.exists('/.dockerenv')
+# Set CV_WORKER_IN_DOCKER=true in docker-compose; never set on bare-metal Vast.ai
+_IS_DOCKER = os.environ.get("CV_WORKER_IN_DOCKER", "false").lower() == "true"
 
 # ── YOLO person detector (lazy, thread-safe) ──────────────────────────────────
 _yolo_model = None
@@ -155,20 +155,22 @@ def get_db_connection():
             time.sleep(5)
 
 
+_RECONNECT_ERRNO = {2006, 2013, 2055, 4031}   # MySQL gone away / lost connection
+
 def _safe_exec(cursor, conn, sql, params=()):
-    """Execute with automatic reconnect on OperationalError. Returns cursor."""
+    """Execute with reconnect only on connection-loss errors. Returns cursor."""
     try:
         cursor.execute(sql, params)
         return cursor
     except pymysql.err.OperationalError as e:
-        logger.warning(f"DB operational error, reconnecting: {e}")
-        try:
-            conn.ping(reconnect=True)
-            cursor = conn.cursor()
-            cursor.execute(sql, params)
-            return cursor
-        except Exception as e2:
-            raise e2
+        errno = e.args[0] if e.args else 0
+        if errno not in _RECONNECT_ERRNO:
+            raise   # schema / permission error — don't mask with reconnect
+        logger.warning(f"DB connection lost ({errno}), reconnecting...")
+        conn.ping(reconnect=True)
+        cursor = conn.cursor()
+        cursor.execute(sql, params)
+        return cursor
 
 
 def _get_zone_threat(zone_id, cursor, conn) -> str:
@@ -587,7 +589,7 @@ def process_final_alert(cam, alert_data, conn, cursor, detection_type='face'):
                      confidence, status, threatLevel, detectionType)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (person_id, cam_id, zone_id, face_url, frame_url,
-                  confidence or None, alert_status, threat_level, detection_type))
+                  confidence if confidence is not None else 0, alert_status, threat_level, detection_type))
         except Exception:
             conn.rollback()
             _safe_exec(cursor, conn, """
@@ -596,7 +598,7 @@ def process_final_alert(cam, alert_data, conn, cursor, detection_type='face'):
                      confidence, status, threatLevel)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """, (person_id, cam_id, zone_id, face_url, frame_url,
-                  confidence or None, alert_status, threat_level))
+                  confidence if confidence is not None else 0, alert_status, threat_level))
         alert_id = cursor.lastrowid
 
         try:
@@ -606,7 +608,7 @@ def process_final_alert(cam, alert_data, conn, cursor, detection_type='face'):
                      confidence, eventType, detectionType)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """, (person_id, cam_id, zone_id, face_url, frame_url,
-                  confidence or None, event_type, detection_type))
+                  confidence if confidence is not None else 0, event_type, detection_type))
         except Exception:
             conn.rollback()
             _safe_exec(cursor, conn, """
@@ -615,7 +617,7 @@ def process_final_alert(cam, alert_data, conn, cursor, detection_type='face'):
                      confidence, eventType)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
             """, (person_id, cam_id, zone_id, face_url, frame_url,
-                  confidence or None, event_type))
+                  confidence if confidence is not None else 0, event_type))
 
         conn.commit()
         return alert_id
@@ -638,11 +640,11 @@ def _upgrade_alert(alert_id, person_id, confidence, role, face_url, detection_ty
             SET personId=%s, confidence=%s, threatLevel=%s,
                 faceSnapshotUrl=COALESCE(%s, faceSnapshotUrl), detectionType=%s
             WHERE id=%s
-        """, (person_id, confidence or None, threat_level, face_url, detection_type, alert_id))
+        """, (person_id, confidence if confidence is not None else 0, threat_level, face_url, detection_type, alert_id))
         _safe_exec(cursor, conn, """
             INSERT INTO events (personId, cameraId, zoneId, faceSnapshotUrl, confidence, eventType, detectionType)
             SELECT %s, cameraId, zoneId, %s, %s, %s, %s FROM alerts WHERE id=%s
-        """, (person_id, face_url, confidence or None, event_type, detection_type, alert_id))
+        """, (person_id, face_url, confidence if confidence is not None else 0, event_type, detection_type, alert_id))
         conn.commit()
         logger.info(f"Alert {alert_id} upgraded → {detection_type} person={role} conf={confidence}")
     except Exception as e:
