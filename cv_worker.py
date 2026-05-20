@@ -47,15 +47,8 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 face_lock    = threading.Lock()
 stop_signals: dict = {}   # cam_id → True  (set True to stop that camera thread)
 
-def _running_in_docker():
-    try:
-        with open('/proc/1/cgroup') as f:
-            content = f.read()
-            return 'docker' in content or 'containerd' in content or 'lxc' in content
-    except Exception:
-        return False
-
-_IS_DOCKER = _running_in_docker()
+# True only inside a real Docker container (/.dockerenv is created by Docker, not LXC/Vast.ai)
+_IS_DOCKER = os.path.exists('/.dockerenv')
 
 # ── YOLO person detector (lazy, thread-safe) ──────────────────────────────────
 _yolo_model = None
