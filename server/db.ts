@@ -426,8 +426,9 @@ export async function updateSettings(data: Partial<InsertSetting>) {
 export async function clearAlertsAndEvents() {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  
-  // Clear alerts, events and movements tables
+
+  await db.execute(sql`DELETE FROM zone_visits`);
+  await db.execute(sql`DELETE FROM access_logs`);
   await db.delete(alerts);
   await db.delete(events);
   await db.delete(movements);
@@ -441,16 +442,14 @@ export async function fullSystemReset() {
   if (!db) throw new Error("Database not available");
 
   try {
-    // 1. Clear Tables in order to respect constraints
-    console.log("[System Reset] Clearing alerts...");
+    await db.execute(sql`DELETE FROM zone_visits`);
+    await db.execute(sql`DELETE FROM access_logs`);
     await db.delete(alerts);
-    console.log("[System Reset] Clearing events...");
     await db.delete(events);
-    console.log("[System Reset] Clearing movements...");
     await db.delete(movements);
-    console.log("[System Reset] Clearing persons...");
+    await db.delete(personGroupMembership);
     await db.delete(persons);
-    
+
     console.log("[System Reset] Completed Full System Reset. Upload files preserved.");
     return { success: true };
   } catch (error) {

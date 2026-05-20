@@ -109,6 +109,8 @@ export default function SystemSettings() {
       toast.success("Database logs cleared");
     } catch (error) {
       toast.error("Failed to clear database");
+    } finally {
+      window.location.reload();
     }
   };
 
@@ -117,9 +119,10 @@ export default function SystemSettings() {
     try {
       await fullResetMutation.mutateAsync();
       toast.success("System has been fully reset");
-      window.location.reload();
     } catch (error) {
       toast.error("Failed to reset system");
+    } finally {
+      window.location.reload();
     }
   };
 

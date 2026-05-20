@@ -472,7 +472,7 @@ class FaceMatcher:
 
 
 # ── Movement record ───────────────────────────────────────────────────────────
-def create_movement_record(cam, tracker_data, alert_id, cursor, conn):
+def create_movement_record(cam, tracker_data, alert_id, cursor, conn, detection_type='body_only'):
     cam_id     = cam.get('id')
     zone_id    = cam.get('zoneId', 1)
     tracker_id = str(tracker_data.get('tracker_id', 'unknown'))
@@ -491,32 +491,24 @@ def create_movement_record(cam, tracker_data, alert_id, cursor, conn):
     face_count          = tracker_data.get('face_count_seen', 0)
     frame_urls          = json.dumps(all_urls)
 
+    # Map to movements.detectionType ENUM('FACE','BODY','MOTION')
+    mov_det_type = 'BODY' if detection_type == 'body_only' else 'FACE'
+
     try:
         _safe_exec(cursor, conn, """
             INSERT INTO movements
                 (cameraId, zoneId, trackerId, frameUrls, bestFrameUrl, faceCropUrl,
-                 faceCount, frameCount, alertId, suppressionReason, suppressionDetails)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 faceCount, frameCount, detectionType, alertId, suppressionReason, suppressionDetails)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (cam_id, zone_id, tracker_id, frame_urls, best_frame_url, face_crop_url,
-              face_count, 0, alert_id, suppression_reason, suppression_details))
+              face_count, 0, mov_det_type, alert_id, suppression_reason, suppression_details))
         conn.commit()
-    except Exception:
+    except Exception as e2:
+        logger.error(f"Movement record save failed: {e2}")
         try:
             conn.rollback()
-            _safe_exec(cursor, conn, """
-                INSERT INTO movements
-                    (cameraId, zoneId, trackerId, frameUrls, bestFrameUrl, faceCropUrl,
-                     faceCount, frameCount, alertId)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (cam_id, zone_id, tracker_id, frame_urls, best_frame_url, face_crop_url,
-                  face_count, 0, alert_id))
-            conn.commit()
-        except Exception as e2:
-            logger.error(f"Movement record save failed: {e2}")
-            try:
-                conn.rollback()
-            except Exception:
-                pass
+        except Exception:
+            pass
 
 
 # ── Alert persistence ─────────────────────────────────────────────────────────
@@ -572,8 +564,12 @@ def process_final_alert(cam, alert_data, conn, cursor, detection_type='face'):
                 pass
             role = 'UNKNOWN'
 
+    # Map to alerts.detectionType ENUM('FACE','NO_FACE')
+    alert_det_type = 'NO_FACE' if detection_type == 'body_only' else 'FACE'
+
+    # Map to events.eventType ENUM('recognition','unknown','alert','identity_correction','false_positive','no_face')
     event_type = 'no_face' if detection_type == 'body_only' else (
-        'recognized' if (role and role != 'UNKNOWN') else 'unknown'
+        'recognition' if (role and role != 'UNKNOWN') else 'unknown'
     )
 
     logger.info(
@@ -581,71 +577,61 @@ def process_final_alert(cam, alert_data, conn, cursor, detection_type='face'):
         f"person={role or 'UNKNOWN'} id={person_id} conf={confidence} threat={threat_level}"
     )
 
+    # Insert alert and commit immediately so an event failure cannot roll it back.
     try:
-        # Try with detectionType column first (may not exist on older schema)
-        try:
-            _safe_exec(cursor, conn, """
-                INSERT INTO alerts
-                    (personId, cameraId, zoneId, faceSnapshotUrl, bestFrameSnapshotUrl,
-                     confidence, status, threatLevel, detectionType)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (person_id, cam_id, zone_id, face_url, frame_url,
-                  confidence if confidence is not None else 0, alert_status, threat_level, detection_type))
-        except Exception:
-            conn.rollback()
-            _safe_exec(cursor, conn, """
-                INSERT INTO alerts
-                    (personId, cameraId, zoneId, faceSnapshotUrl, bestFrameSnapshotUrl,
-                     confidence, status, threatLevel)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """, (person_id, cam_id, zone_id, face_url, frame_url,
-                  confidence if confidence is not None else 0, alert_status, threat_level))
+        _safe_exec(cursor, conn, """
+            INSERT INTO alerts
+                (personId, cameraId, zoneId, faceSnapshotUrl, bestFrameSnapshotUrl,
+                 confidence, status, threatLevel, detectionType)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (person_id, cam_id, zone_id, face_url, frame_url,
+              confidence if confidence is not None else 0, alert_status, threat_level, alert_det_type))
         alert_id = cursor.lastrowid
-
-        try:
-            _safe_exec(cursor, conn, """
-                INSERT INTO events
-                    (personId, cameraId, zoneId, faceSnapshotUrl, bestFrameSnapshotUrl,
-                     confidence, eventType, detectionType)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """, (person_id, cam_id, zone_id, face_url, frame_url,
-                  confidence if confidence is not None else 0, event_type, detection_type))
-        except Exception:
-            conn.rollback()
-            _safe_exec(cursor, conn, """
-                INSERT INTO events
-                    (personId, cameraId, zoneId, faceSnapshotUrl, bestFrameSnapshotUrl,
-                     confidence, eventType)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """, (person_id, cam_id, zone_id, face_url, frame_url,
-                  confidence if confidence is not None else 0, event_type))
-
         conn.commit()
-        return alert_id
     except Exception as e:
-        logger.error(f"DB error creating alert: {e}")
+        logger.error(f"Alert INSERT failed: {e}")
         try:
             conn.rollback()
         except Exception:
             pass
         return None
 
+    # Event is best-effort; alert is already committed above.
+    try:
+        _safe_exec(cursor, conn, """
+            INSERT INTO events
+                (personId, cameraId, zoneId, faceSnapshotUrl, bestFrameSnapshotUrl,
+                 confidence, eventType)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """, (person_id, cam_id, zone_id, face_url, frame_url,
+              confidence if confidence is not None else 0, event_type))
+        conn.commit()
+    except Exception as e:
+        logger.warning(f"Event INSERT failed (alert {alert_id} already saved): {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
+    return alert_id
+
 
 def _upgrade_alert(alert_id, person_id, confidence, role, face_url, detection_type, conn, cursor):
     """Upgrade a body_only alert when the same person's face becomes visible."""
-    threat_level = 'low' if (person_id and role and role != 'UNKNOWN') else 'medium'
-    event_type   = 'recognized' if (role and role != 'UNKNOWN') else 'unknown'
+    threat_level   = 'low' if (person_id and role and role != 'UNKNOWN') else 'medium'
+    event_type     = 'recognition' if (role and role != 'UNKNOWN') else 'unknown'
+    alert_det_type = 'NO_FACE' if detection_type == 'body_only' else 'FACE'
     try:
         _safe_exec(cursor, conn, """
             UPDATE alerts
             SET personId=%s, confidence=%s, threatLevel=%s,
                 faceSnapshotUrl=COALESCE(%s, faceSnapshotUrl), detectionType=%s
             WHERE id=%s
-        """, (person_id, confidence if confidence is not None else 0, threat_level, face_url, detection_type, alert_id))
+        """, (person_id, confidence if confidence is not None else 0, threat_level, face_url, alert_det_type, alert_id))
         _safe_exec(cursor, conn, """
-            INSERT INTO events (personId, cameraId, zoneId, faceSnapshotUrl, confidence, eventType, detectionType)
-            SELECT %s, cameraId, zoneId, %s, %s, %s, %s FROM alerts WHERE id=%s
-        """, (person_id, face_url, confidence if confidence is not None else 0, event_type, detection_type, alert_id))
+            INSERT INTO events (personId, cameraId, zoneId, faceSnapshotUrl, confidence, eventType)
+            SELECT %s, cameraId, zoneId, %s, %s, %s FROM alerts WHERE id=%s
+        """, (person_id, face_url, confidence if confidence is not None else 0, event_type, alert_id))
         conn.commit()
         logger.info(f"Alert {alert_id} upgraded → {detection_type} person={role} conf={confidence}")
     except Exception as e:
@@ -1026,7 +1012,7 @@ def process_camera(cam, matcher):
                     last_alert_times[best_tid]  = now
                     biometric_memory[best_tid]  = now
 
-                    create_movement_record(cam, alert_data, alert_id, cursor, conn)
+                    create_movement_record(cam, alert_data, alert_id, cursor, conn, detection_type=det_type)
 
                     # Zone visit
                     gtid      = str(uuid.uuid4())
