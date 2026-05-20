@@ -41,14 +41,18 @@ YOLO_PERSON_CONF  = 0.4    # minimum YOLO confidence for person class
 TRACK_IOU_THRESH  = 0.3    # IoU to link a detection to an existing track
 TRACK_TIMEOUT_S   = 5.0    # seconds before a track with no detection is dropped
 
-UPLOAD_DIR = "/app/client/public/uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-
 face_lock    = threading.Lock()
 stop_signals: dict = {}   # cam_id → True  (set True to stop that camera thread)
 
 # Set CV_WORKER_IN_DOCKER=true in docker-compose; never set on bare-metal Vast.ai
 _IS_DOCKER = os.environ.get("CV_WORKER_IN_DOCKER", "false").lower() == "true"
+
+UPLOAD_DIR = (
+    "/app/client/public/uploads"
+    if _IS_DOCKER
+    else os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
+)
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # ── YOLO person detector (lazy, thread-safe) ──────────────────────────────────
 _yolo_model = None
