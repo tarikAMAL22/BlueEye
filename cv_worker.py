@@ -571,7 +571,7 @@ def process_final_alert(cam, alert_data, conn, cursor, detection_type='face'):
                 pass
             role = 'UNKNOWN'
 
-    event_type = 'body_only' if detection_type == 'body_only' else (
+    event_type = 'no_face' if detection_type == 'body_only' else (
         'recognized' if (role and role != 'UNKNOWN') else 'unknown'
     )
 
@@ -946,16 +946,17 @@ def process_camera(cam, matcher):
                 if det_type in ('face_visible', 'partial_face') and face_crop is not None:
                     pid_new, conf_new, role_new, tier_new, enc_new = _recognize_face(face_crop, matcher)
 
-                    # Bug 6 fix: confidence floor BEFORE touching biometric memory
-                    if conf_new >= 40 or pid_new is not None:
-                        person_id  = pid_new if pid_new else person_id
+                    # Always record actual confidence + encoding for the alert.
+                    # Bug 6 fix: only update biometric dedup memory for high-confidence results.
+                    if enc_new is not None:
                         confidence = conf_new
                         role       = role_new
                         tier       = tier_new
-                        if enc_new is not None:
-                            encoding                  = enc_new
-                            tdata['encoding']         = encoding
-                            tdata['person_id']        = person_id
+                        encoding   = enc_new
+                        tdata['encoding'] = enc_new
+                        if pid_new is not None:
+                            person_id         = pid_new
+                            tdata['person_id'] = pid_new
 
                     prev_det_type = tdata['detection_type']
                     tdata['detection_type'] = det_type
@@ -984,7 +985,9 @@ def process_camera(cam, matcher):
 
                 bio_window = get_config('biometric_memory_seconds')
                 bio_ts     = biometric_memory.get(best_tid, 0)
-                if bio_ts and (now - bio_ts) < bio_window:
+                # Bug 6 fix: low-confidence unknowns don't reset biometric memory window,
+                # but they can still generate an alert (avoids suppressing real detections)
+                if bio_ts and (now - bio_ts) < bio_window and (confidence >= 40 or person_id):
                     continue
 
                 # ── Build snapshot for alert ──────────────────────────────
