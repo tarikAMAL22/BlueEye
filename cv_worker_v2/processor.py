@@ -525,12 +525,11 @@ def _do_persist(job: PersistJob) -> None:
     # ────────────────────────────────────────────────────────────────────────
 
     # Determine movement detectionType from face validity
-    if detection_type == "FACE" and face_is_valid:
+    # Note: detection_type is set later (after face_is_valid branch); use face_is_valid here.
+    if face_is_valid:
         mov_detection_type = "FACE"
-    elif detection_type == "NO_FACE" or not face_is_valid:
-        mov_detection_type = "BODY"
     else:
-        mov_detection_type = "MOTION"
+        mov_detection_type = "BODY"
 
     # Log movement record (always — even if cooldown suppresses the alert)
     movement_id = db.create_movement(
