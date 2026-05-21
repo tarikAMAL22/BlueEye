@@ -527,10 +527,44 @@ def process_final_alert(cam, alert_data, conn, cursor, detection_type='face'):
     face_image    = alert_data.get('face_image')
     full_frame    = alert_data.get('full_frame')
     face_encoding = alert_data.get('face_encoding')
+    crop_coords   = alert_data.get('crop_coords')
     person_id     = alert_data.get('person_id')
     confidence    = alert_data.get('confidence', 0)
     role          = alert_data.get('role')
     tier          = alert_data.get('tier', 'unknown')
+
+    # Fix 4: reconstruct face_image atomically from full_frame + crop_coords so the
+    # snapshot is always the exact bbox we measured, not a stale copy.
+    if (crop_coords is not None and full_frame is not None
+            and detection_type in ('face', 'partial_face')):
+        ct, cb, cl, cr = crop_coords
+        reconstructed = full_frame[ct:cb, cl:cr]
+        if reconstructed.size > 0:
+            face_image = reconstructed
+
+    # Fix 3: sanity-check that face_image actually contains a detectable face whose
+    # encoding is consistent with face_encoding; skip the alert if not.
+    if detection_type in ('face', 'partial_face') and face_image is not None and face_image.size > 0:
+        try:
+            rgb_check = cv2.cvtColor(face_image, cv2.COLOR_BGR2RGB)
+            with face_lock:
+                check_locs = face_recognition.face_locations(
+                    rgb_check, model='hog', number_of_times_to_upsample=1)
+            if not check_locs:
+                logger.warning(
+                    f"[{cam.get('name')}] Sanity check: face_image has no detectable face — skipping alert")
+                return None
+            if face_encoding is not None:
+                check_encs = face_recognition.face_encodings(rgb_check, check_locs)
+                if check_encs:
+                    dist = float(face_recognition.face_distance([face_encoding], check_encs[0])[0])
+                    if dist > 0.6:
+                        logger.warning(
+                            f"[{cam.get('name')}] Sanity check: encoding distance {dist:.3f} > 0.6 "
+                            f"— cross-tracker contamination detected, skipping alert")
+                        return None
+        except Exception as e:
+            logger.debug(f"[{cam.get('name')}] Sanity check exception (continuing): {e}")
 
     face_url  = _save_snapshot(face_image, "face",  quality=95)
     frame_url = _save_snapshot(full_frame, "frame", quality=90)
@@ -741,11 +775,17 @@ def _classify_detection(frame, x1, y1, x2, y2):
     left_f   = x1 + left_c
     right_f  = x1 + right_c
 
-    pad       = int(face_h * 0.15)
-    face_crop = frame[max(0, top_f - pad):min(frame.shape[0], bottom_f + pad),
-                      max(0, left_f - pad):min(frame.shape[1], right_f + pad)]
+    pad = int(face_h * 0.15)
+    ct  = max(0, top_f    - pad)
+    cb  = min(frame.shape[0], bottom_f + pad)
+    cl  = max(0, left_f   - pad)
+    cr  = min(frame.shape[1], right_f  + pad)
+    face_crop = frame[ct:cb, cl:cr]
 
-    return det_type, face_crop, (top_f, right_f, bottom_f, left_f)
+    # Third return value: actual slice coordinates used for face_crop in full-frame space.
+    # Stored in alert_data so process_final_alert can reconstruct face_image from full_frame
+    # atomically (Fix 4).
+    return det_type, face_crop, (ct, cb, cl, cr)
 
 
 # ── Layer 3: face recognition on a face crop ─────────────────────────────────
@@ -931,7 +971,7 @@ def process_camera(cam, matcher):
                 tdata = active_tracks[best_tid]
 
                 # ── Classify detection ────────────────────────────────────
-                det_type, face_crop, _ = _classify_detection(frame, x1, y1, x2, y2)
+                det_type, face_crop, face_crop_coords = _classify_detection(frame, x1, y1, x2, y2)
                 # Normalise to DB column values: 'face_visible' → 'face'
                 if det_type == 'face_visible':
                     det_type = 'face'
@@ -1022,6 +1062,7 @@ def process_camera(cam, matcher):
                     'face_image':    snap,
                     'full_frame':    frame.copy(),
                     'face_encoding': encoding,
+                    'crop_coords':   face_crop_coords,   # Fix 4: slice coords for face_crop in full_frame
                     'person_id':     person_id,
                     'confidence':    confidence,
                     'role':          role,
