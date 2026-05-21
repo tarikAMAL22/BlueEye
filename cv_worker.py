@@ -31,15 +31,15 @@ DB_NAME     = os.environ.get("DB_NAME",     "blueeye")
 
 REID_TIME_WINDOW_SECONDS = int(os.environ.get("REID_TIME_WINDOW_SECONDS", "120"))
 BLUR_THRESHOLD           = float(os.environ.get("BLUR_THRESHOLD",         "80"))
-FACE_MATCH_HIGH          = float(os.environ.get("FACE_MATCH_HIGH",        "0.35"))
-FACE_MATCH_MED           = float(os.environ.get("FACE_MATCH_MED",         "0.45"))
+FACE_MATCH_HIGH          = float(os.environ.get("FACE_MATCH_HIGH",        "0.50"))
+FACE_MATCH_MED           = float(os.environ.get("FACE_MATCH_MED",         "0.62"))
 USE_CNN_DETECTOR         = os.environ.get("USE_CNN_DETECTOR",  "false").lower() == "true"
 USE_YOLO_DETECTOR        = os.environ.get("USE_YOLO_DETECTOR", "true").lower()  == "true"
 
 MIN_MOTION_PIXELS = 1500   # non-zero pixels in 320×180 MOG2 mask to trigger detection
 YOLO_PERSON_CONF  = 0.4    # minimum YOLO confidence for person class
 TRACK_IOU_THRESH  = 0.3    # IoU to link a detection to an existing track
-TRACK_TIMEOUT_S   = 5.0    # seconds before a track with no detection is dropped
+TRACK_TIMEOUT_S   = 10.0   # seconds before a track with no detection is dropped
 
 face_lock    = threading.Lock()
 stop_signals: dict = {}   # cam_id → True  (set True to stop that camera thread)
