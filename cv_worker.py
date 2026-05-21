@@ -287,8 +287,11 @@ def process_camera(cam, matcher):
                         if now - encoding_cooldowns[enc_hash] < ENCODING_COOLDOWN:
                             continue
 
-                    # ── Confidence floor ──────────────────────────────────────
-                    if confidence < 40:
+                    # ── Confidence floor (only when known persons exist) ──────
+                    # When persons table is empty, matcher returns confidence=0.0.
+                    # We still need to fire UNKNOWN alerts, so only skip low confidence
+                    # when there are actually known persons to compare against.
+                    if person_id and confidence < 40:
                         continue
 
                     # ── Scale bbox to full resolution ─────────────────────────
