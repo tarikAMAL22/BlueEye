@@ -84,7 +84,7 @@ def _get_yolo():
 # ── CV config (DB-backed, live-reloaded every 30 s) ───────────────────────────
 _cv_config = {
     'alert_cooldown_seconds':       5,
-    'biometric_memory_seconds':     20,
+    'biometric_memory_seconds':     60,
     'biometric_distance_threshold': 0.40,
     'tracking_radius_px':           80,
     'detection_buffer_seconds':     1.0,
@@ -114,7 +114,7 @@ def load_cv_config_from_db(cursor):
         with _cv_config_lock:
             _cv_config.update({
                 'alert_cooldown_seconds':       min(30,  max(3,   int(row['alert_cooldown_seconds']))),
-                'biometric_memory_seconds':     min(60,  max(10,  int(row['biometric_memory_seconds']))),
+                'biometric_memory_seconds':     min(300, max(10,  int(row['biometric_memory_seconds']))),
                 'biometric_distance_threshold': float(row['biometric_distance_threshold']),
                 'tracking_radius_px':           min(120, max(40,  int(row['tracking_radius_px']))),
                 'detection_buffer_seconds':     min(3.0, max(0.5, float(row['detection_buffer_seconds']))),
@@ -675,7 +675,7 @@ def _detect_persons_fallback(frame):
         with face_lock:
             locs = face_recognition.face_locations(
                 rgb, model='hog',
-                number_of_times_to_upsample=get_config('upsample_times') or 1,
+                number_of_times_to_upsample=get_config('upsample_times') or 2,
             )
     except Exception as e:
         logger.debug(f"face_locations fallback failed: {e}")
@@ -979,14 +979,19 @@ def process_camera(cam, matcher):
 
                 # ── Cooldown + biometric dedup checks ─────────────────────
                 effective_cooldown = zone_cooldown if person_id else max(5, zone_cooldown // 3)
+
+                # Check cooldown by track AND by person_id so a track reset
+                # for the same identified person doesn't bypass the cooldown.
                 last_alert = last_alert_times.get(best_tid, 0)
+                if person_id:
+                    last_alert = max(last_alert, last_alert_times.get(person_id, 0))
                 if now - last_alert < effective_cooldown:
                     continue
 
                 bio_window = get_config('biometric_memory_seconds')
-                bio_ts     = biometric_memory.get(best_tid, 0)
-                # Bug 6 fix: low-confidence unknowns don't reset biometric memory window,
-                # but they can still generate an alert (avoids suppressing real detections)
+                bio_ts = biometric_memory.get(best_tid, 0)
+                if person_id:
+                    bio_ts = max(bio_ts, biometric_memory.get(person_id, 0))
                 if bio_ts and (now - bio_ts) < bio_window and (confidence >= 40 or person_id):
                     continue
 
@@ -1015,6 +1020,9 @@ def process_camera(cam, matcher):
                     tdata['alert_id']           = alert_id
                     last_alert_times[best_tid]  = now
                     biometric_memory[best_tid]  = now
+                    if person_id:
+                        last_alert_times[person_id] = now
+                        biometric_memory[person_id] = now
 
                     create_movement_record(cam, alert_data, alert_id, cursor, conn, detection_type=det_type)
 
