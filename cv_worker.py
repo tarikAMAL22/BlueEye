@@ -812,8 +812,9 @@ def process_camera(cam, matcher):
     # ── Per-camera state (Bug 3 fix: nothing shared between threads) ──────────
     active_tracks:     dict = {}   # track_id → {bbox, person_id, last_seen, detection_type, encoding, alert_id}
     last_alert_times:  dict = {}   # track_id → timestamp of last alert
-    biometric_memory:  dict = {}   # track_id → timestamp for dedup window
+    biometric_memory:  dict = {}   # track_id/person_id → timestamp for dedup window
     active_zone_visits: dict = {}  # (person_id_or_track_id, zone_id) → {visit_id, last_seen}
+    recent_face_encodings: list = []  # [(encoding, timestamp)] — encoding-level dedup
 
     # Layer 1: per-camera MOG2
     bg_sub = cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=50, detectShadows=False)
@@ -995,6 +996,21 @@ def process_camera(cam, matcher):
                 if bio_ts and (now - bio_ts) < bio_window and (confidence >= 40 or person_id):
                     continue
 
+                # Encoding-level dedup: suppress if a recent alert had a similar face,
+                # regardless of which person_id the matcher assigned.
+                if encoding is not None:
+                    recent_face_encodings[:] = [
+                        (e, t) for e, t in recent_face_encodings
+                        if (now - t) < bio_window * 2
+                    ]
+                    _similar_seen = any(
+                        (now - t) < bio_window
+                        and float(face_recognition.face_distance([e], encoding)[0]) < FACE_MATCH_MED
+                        for e, t in recent_face_encodings
+                    )
+                    if _similar_seen:
+                        continue
+
                 # ── Build snapshot for alert ──────────────────────────────
                 body_crop = frame[max(0, y1):min(frame.shape[0], y2),
                                   max(0, x1):min(frame.shape[1], x2)]
@@ -1023,6 +1039,8 @@ def process_camera(cam, matcher):
                     if person_id:
                         last_alert_times[person_id] = now
                         biometric_memory[person_id] = now
+                    if encoding is not None:
+                        recent_face_encodings.append((encoding.copy(), now))
 
                     create_movement_record(cam, alert_data, alert_id, cursor, conn, detection_type=det_type)
 
