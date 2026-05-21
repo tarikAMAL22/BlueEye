@@ -2,7 +2,6 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# Install system dependencies for OpenCV and dlib (cmake, build-essential)
 RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     libsm6 \
@@ -11,10 +10,12 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Install python packages including face_recognition (this installs dlib)
-RUN pip install --no-cache-dir opencv-python-headless mysql-connector-python requests face_recognition numpy Pillow flask
+RUN pip install --no-cache-dir opencv-python-headless mysql-connector-python \
+    requests face_recognition numpy Pillow flask scipy redis
 
-# Copy worker script
+# YOLOv8 face detector (optional — enabled via USE_YOLO_DETECTOR=true)
+RUN pip install --no-cache-dir ultralytics
+
 COPY cv_worker.py .
 
 CMD ["python", "cv_worker.py"]
