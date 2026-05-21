@@ -1,5 +1,5 @@
 """
-BlueEye CV Worker — v3  (persistent tracking + motion-gated pipeline)
+BlueEye CV Worker — v3.1  (persistent tracking + motion-gated pipeline)
 =====================================================================
 
 Architecture per frame:
@@ -61,13 +61,13 @@ UPLOAD_DIR = (
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # ── Tuning constants ──────────────────────────────────────────────────────────
-MIN_MOTION_PIXELS     = 1500    # ignore micro-movements / sensor noise
+MIN_MOTION_PIXELS     = 300     # ignore micro-movements / sensor noise
 BUFFER_FRAMES         = 5       # frames to collect before creating alert
 LOST_TIMEOUT          = 3.0     # seconds without detection → track closed
 ALERT_UPDATE_INTERVAL = 2.0     # min seconds between DB UPDATEs for same track
 BIOMETRIC_COOLDOWN    = 120     # seconds before same face can create NEW track
 ENCODING_DISTANCE_THR = 0.50    # face_recognition match threshold
-TRACKER_SCORE_THR     = 0.30    # min combined score to link detection to track
+TRACKER_SCORE_THR     = 0.15    # min combined score to link detection to track
 MIN_FACE_HEIGHT_PX    = 40      # ignore tiny distant faces
 FACE_SCALE            = 0.5     # resize factor before face_recognition
 
@@ -406,15 +406,17 @@ def _refresh_track(
 
     # Face match (refresh every detection)
     person_id, confidence, role = matcher.match(encoding)
-    if person_id and (not track.person_id or confidence > track.confidence):
+    prev_confidence = track.confidence   # capture BEFORE any update (Fix 4)
+
+    if person_id and (not track.person_id or confidence > prev_confidence):
         track.person_id  = person_id
         track.confidence = confidence
         track.role       = role
     elif not track.person_id:
-        track.confidence = max(track.confidence, confidence)
+        track.confidence = max(prev_confidence, confidence)
 
-    # Keep best encoding (highest-confidence angle)
-    if track.face_encoding is None or confidence > track.confidence:
+    # Keep encoding from best-confidence detection angle
+    if track.face_encoding is None or confidence > prev_confidence:
         track.face_encoding = encoding
 
     # Crop candidate
@@ -472,11 +474,12 @@ def process_camera(cam: dict, matcher: FaceMatcher):
     encoding_cooldowns: Dict[tuple, float] = {}
 
     bg_sub = cv2.createBackgroundSubtractorMOG2(
-        history=500, varThreshold=50, detectShadows=False
+        history=200, varThreshold=16, detectShadows=False
     )
 
-    cap         = None
-    frame_count = 0
+    cap                  = None
+    frame_count          = 0
+    last_motion_log_time = 0.0   # throttle: one motion snapshot every 5s
 
     try:
         while not stop_signals.get(cam_id):
@@ -516,6 +519,11 @@ def process_camera(cam: dict, matcher: FaceMatcher):
             detections_this_frame = 0
 
             if motion_detected:
+                # Log every motion event (with or without face) — throttled 5s
+                if now - last_motion_log_time >= 5.0:
+                    log_motion_event(cam_id, zone_id, frame, motion_pix, 0, cursor, conn)
+                    last_motion_log_time = now
+
                 # ════════════════════════════════════════════════════════════
                 # LAYER 2 — Face detection (only when pixels moved)
                 # ════════════════════════════════════════════════════════════
@@ -532,14 +540,6 @@ def process_camera(cam: dict, matcher: FaceMatcher):
 
                     h_f, w_f  = frame.shape[:2]
                     scale_inv = 1.0 / FACE_SCALE
-
-                    # Log motion event (throttled: every 30 frames)
-                    if frame_count % 30 == 0:
-                        log_motion_event(
-                            cam_id, zone_id, frame,
-                            motion_pix, len(face_locs),
-                            cursor, conn
-                        )
 
                     # ════════════════════════════════════════════════════════
                     # LAYER 3 — Per-face tracking
@@ -564,7 +564,7 @@ def process_camera(cam: dict, matcher: FaceMatcher):
                             continue
 
                         bbox     = (f_top, f_right, f_bottom, f_left)
-                        enc_hash = tuple(np.round(encoding[:8], 2))
+                        enc_hash = tuple(np.round(encoding[:16], 1))
 
                         # ── Biometric cooldown (global, cross-restart) ─────────
                         is_recent = False
