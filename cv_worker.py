@@ -213,44 +213,62 @@ class FaceMatcher:
 # DB writers (INSERT first alert / UPDATE with better frame)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _ensure_person(track: Track, cursor, conn) -> Optional[int]:
-    """Return person_id, creating UNKNOWN record if needed."""
-    if track.person_id:
-        return track.person_id
+def _validate_face_image(face_image: np.ndarray) -> bool:
+    """Fix 2: verify the crop actually contains a detectable face before writing to DB."""
+    if face_image is None or face_image.size == 0:
+        return False
     try:
-        uid      = str(uuid.uuid4())
-        name     = f"unknown-{uid[:8]}"
-        enc_json = json.dumps(track.face_encoding.tolist())
-        face_url, _ = save_images(track.face_image, track.full_frame)
-        safe_execute(cursor, conn,
-            "INSERT INTO persons (name, role, photoUrl, faceEncoding) VALUES (%s,'UNKNOWN',%s,%s)",
-            (name, face_url, enc_json)
-        )
-        pid = cursor.lastrowid
-        conn.commit()
-        track.person_id = pid
-        track.role      = 'UNKNOWN'
-        return pid
-    except Exception as e:
-        logger.error(f"Insert person failed: {e}")
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-        return None
+        rgb = cv2.cvtColor(face_image, cv2.COLOR_BGR2RGB)
+        with face_lock:
+            locs = face_recognition.face_locations(rgb, model='hog',
+                                                   number_of_times_to_upsample=1)
+        return len(locs) > 0
+    except Exception:
+        return False
 
 
 def create_alert(track: Track, cam: dict, cursor, conn):
-    """INSERT a new alert row for this track. Sets track.alert_id."""
-    person_id = _ensure_person(track, cursor, conn)
-    if not person_id:
+    """INSERT a new alert row for this track. Sets track.alert_id.
+    Fix 1: single save_images() call — persons.photoUrl and alerts.faceSnapshotUrl
+    point to the exact same file.
+    """
+    if track.face_image is None or track.face_encoding is None:
         return
 
+    # Fix 2: validate crop before any DB write
+    if not _validate_face_image(track.face_image):
+        logger.warning(f"create_alert: no face in crop for track {track.track_id} — skipping")
+        return
+
+    # Fix 1: one save_images() call shared by person INSERT and alert INSERT
     face_url, frame_url = save_images(track.face_image, track.full_frame)
-    threat  = 'high' if track.role == 'UNKNOWN' else 'medium'
+
     cam_id  = cam.get('id')
     zone_id = cam.get('zoneId', 1)
+    threat  = 'high' if track.role == 'UNKNOWN' else 'medium'
     ev_type = 'recognition' if (track.role and track.role != 'UNKNOWN') else 'unknown'
+
+    # Create UNKNOWN person if needed (uses the same face_url)
+    if not track.person_id:
+        try:
+            uid      = str(uuid.uuid4())
+            enc_json = json.dumps(track.face_encoding.tolist())
+            safe_execute(cursor, conn,
+                "INSERT INTO persons (name, role, photoUrl, faceEncoding) VALUES (%s,'UNKNOWN',%s,%s)",
+                (f"unknown-{uid[:8]}", face_url, enc_json)
+            )
+            track.person_id = cursor.lastrowid
+            track.role      = 'UNKNOWN'
+            conn.commit()
+        except Exception as e:
+            logger.error(f"Insert person failed: {e}")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            return
+
+    person_id = track.person_id
 
     try:
         safe_execute(cursor, conn, """
@@ -259,7 +277,7 @@ def create_alert(track: Track, cam: dict, cursor, conn):
                confidence, status, threatLevel, detectionType)
             VALUES (%s, %s, %s, %s, %s, %s, 'active', %s, 'FACE')
         """, (person_id, cam_id, zone_id, face_url, frame_url, track.confidence, threat))
-        track.alert_id      = cursor.lastrowid
+        track.alert_id       = cursor.lastrowid
         track.last_db_update = time.time()
         conn.commit()
 
@@ -286,11 +304,17 @@ def create_alert(track: Track, cam: dict, cursor, conn):
 
 
 def update_alert(track: Track, cam: dict, cursor, conn):
-    """UPDATE existing alert with better frame + higher confidence."""
+    """UPDATE existing alert with better frame + higher confidence.
+    Fix 3: also updates persons.photoUrl so the profile stays in sync.
+    """
     if not track.alert_id:
         return
     now = time.time()
     if now - track.last_db_update < ALERT_UPDATE_INTERVAL:
+        return
+
+    # Fix 2: validate crop before writing
+    if not _validate_face_image(track.face_image):
         return
 
     face_url, frame_url = save_images(track.face_image, track.full_frame)
@@ -304,6 +328,15 @@ def update_alert(track: Track, cam: dict, cursor, conn):
              WHERE id=%s
         """, (face_url, frame_url, track.confidence, threat, track.alert_id))
         conn.commit()
+
+        # Fix 3: keep persons.photoUrl in sync with the best face crop
+        if track.person_id and track.role == 'UNKNOWN':
+            safe_execute(cursor, conn,
+                "UPDATE persons SET photoUrl=%s WHERE id=%s AND role='UNKNOWN'",
+                (face_url, track.person_id)
+            )
+            conn.commit()
+
         track.last_db_update = now
         logger.debug(f"ALERT #{track.alert_id} UPDATED conf={track.confidence:.1f}%")
     except Exception as e:
