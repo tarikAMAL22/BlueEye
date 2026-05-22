@@ -4,6 +4,7 @@ import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router, protectedProcedure, adminProcedure } from "./_core/trpc";
 import { z } from "zod";
 import * as db from "./db";
+import { motionsRouter } from "./routers/motions";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -642,6 +643,8 @@ export const appRouter = router({
       return { success: true };
     }),
   }),
+
+  motions: motionsRouter,
 
   movements: router({
     list: protectedProcedure

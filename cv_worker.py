@@ -750,10 +750,26 @@ def process_camera(cam: dict, matcher: FaceMatcher):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# GPU detection log
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _log_gpu_status():
+    try:
+        import dlib
+        cuda = getattr(dlib, 'DLIB_USE_CUDA', False)
+        logger.info(f"{'GPU (CUDA)' if cuda else 'CPU only'} — dlib.DLIB_USE_CUDA={cuda}")
+        if cuda:
+            logger.info(f"CUDA devices available: {dlib.cuda.get_num_devices()}")
+    except Exception as e:
+        logger.warning(f"GPU check failed: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Main
 # ══════════════════════════════════════════════════════════════════════════════
 
 def main():
+    _log_gpu_status()
     logger.info("BlueEye CV Worker v3 starting …")
     matcher        = FaceMatcher()
     active_threads: Dict[int, threading.Thread] = {}

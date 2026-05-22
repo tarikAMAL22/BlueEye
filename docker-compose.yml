@@ -57,8 +57,9 @@ services:
   cv-worker:
     build:
       context: .
-      dockerfile: Dockerfile.v2
+      dockerfile: Dockerfile.cv.gpu
     container_name: blueeye-cv-worker
+    runtime: nvidia
     environment:
       - DB_HOST=db
       - DB_USER=root
@@ -70,16 +71,21 @@ services:
       - FACE_MATCH_MED=0.45
       - USE_CNN_DETECTOR=false
       - USE_YOLO_DETECTOR=true
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - CUDA_VISIBLE_DEVICES=0
     depends_on:
       - db
       - redis
     restart: unless-stopped
-    shm_size: '2gb'
+    shm_size: '4gb'
     deploy:
       resources:
         reservations:
-          cpus: '2'
-          memory: 4096M
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     volumes:
       - .:/app
     networks:

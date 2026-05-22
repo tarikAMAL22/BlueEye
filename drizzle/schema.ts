@@ -1,4 +1,5 @@
-import { decimal, int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, json, float } from "drizzle-orm/mysql-core";
+import { decimal, int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, json, float, index } from "drizzle-orm/mysql-core";
+import { sql } from "drizzle-orm";
 
 /**
  * Core user table backing auth flow.
@@ -346,3 +347,23 @@ export const cameraPairs = mysqlTable("camera_pairs", {
 });
 
 export type CameraPair = typeof cameraPairs.$inferSelect;
+
+/**
+ * Motions table: raw MOG2 motion events logged by cv_worker every 5s
+ */
+export const motions = mysqlTable('motions', {
+  id:               int('id').autoincrement().primaryKey(),
+  cameraId:         int('cameraId').notNull(),
+  zoneId:           int('zoneId').notNull().default(1),
+  frameSnapshotUrl: varchar('frameSnapshotUrl', { length: 500 }),
+  motionArea:       int('motionArea').notNull().default(0),
+  personsDetected:  int('personsDetected').notNull().default(0),
+  detectedAt:       timestamp('detectedAt').notNull().default(sql`NOW()`),
+}, (table) => ({
+  cameraIdx:   index('idx_motions_camera').on(table.cameraId),
+  zoneIdx:     index('idx_motions_zone').on(table.zoneId),
+  detectedIdx: index('idx_motions_detected').on(table.detectedAt),
+}))
+
+export type Motion = typeof motions.$inferSelect;
+export type InsertMotion = typeof motions.$inferInsert;

@@ -1,0 +1,32 @@
+FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+RUN apt-get update && apt-get install -y \
+    python3.10 python3.10-dev python3-pip \
+    libglib2.0-0 libsm6 libxext6 libxrender-dev \
+    cmake build-essential git wget \
+    libopenblas-dev liblapack-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN ln -sf /usr/bin/python3.10 /usr/bin/python3 && \
+    ln -sf /usr/bin/python3 /usr/bin/python && \
+    pip3 install --upgrade pip
+
+# Compile dlib from source with CUDA (auto-detected from toolkit present in image)
+RUN DLIB_USE_CUDA=1 pip3 install --no-cache-dir dlib
+
+# Verify CUDA is compiled in — fails build otherwise
+RUN python3 -c "import dlib; assert dlib.DLIB_USE_CUDA, 'CUDA NOT in dlib!'; print('dlib CUDA OK:', dlib.DLIB_USE_CUDA)"
+
+RUN pip3 install --no-cache-dir \
+    face_recognition \
+    opencv-python-headless \
+    mysql-connector-python \
+    numpy Pillow scipy redis ultralytics pymysql
+
+WORKDIR /app
+COPY cv_worker.py .
+CMD ["python3", "cv_worker.py"]
