@@ -146,15 +146,24 @@ def save_images(face_img: np.ndarray, full_frame: np.ndarray):
 
 
 def frame_quality(crop: np.ndarray, bbox: Tuple, frame_shape: Tuple) -> float:
-    """Sharpness × centering × relative size."""
+    """Sharpness (center 50%) × frontal score × relative size."""
     f_top, f_right, f_bottom, f_left = bbox
     h_frame, w_frame = frame_shape[:2]
-    gray      = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    h_crop, w_crop = crop.shape[:2]
+    cy0, cy1 = h_crop // 4, 3 * h_crop // 4
+    cx0, cx1 = w_crop // 4, 3 * w_crop // 4
+    center_region = crop[cy0:cy1, cx0:cx1]
+    if center_region.size == 0:
+        center_region = crop
+    gray      = cv2.cvtColor(center_region, cv2.COLOR_BGR2GRAY)
     sharpness = cv2.Laplacian(gray, cv2.CV_64F).var()
-    face_cx   = (f_left + f_right) / 2
-    center_s  = 1.0 - (abs(face_cx - w_frame / 2) / max(w_frame / 2, 1)) * 0.3
+    face_cx  = (f_left + f_right) / 2
+    face_cy  = (f_top  + f_bottom) / 2
+    dx_norm  = abs(face_cx - w_frame / 2) / max(w_frame / 2, 1)
+    dy_norm  = abs(face_cy - h_frame / 2) / max(h_frame / 2, 1)
+    frontal  = 1.0 - 0.2 * dx_norm - 0.1 * dy_norm
     size_norm = ((f_bottom - f_top) * (f_right - f_left)) / max(w_frame * h_frame, 1)
-    return sharpness * center_s * (1.0 + size_norm * 2.0)
+    return sharpness * frontal * (1.0 + size_norm * 3.0)
 
 
 def compute_iou(a: Tuple, b: Tuple) -> float:
@@ -452,12 +461,17 @@ def _refresh_track(
     if track.face_encoding is None or confidence > prev_confidence:
         track.face_encoding = encoding
 
-    # Crop candidate
-    pad  = int((f_bottom - f_top) * 0.3)
-    ct   = max(0,   f_top    - pad)
-    cb   = min(h_f, f_bottom + int(pad * 1.2))
-    cl   = max(0,   f_left   - pad)
-    cr   = min(w_f, f_right  + pad)
+    # Crop candidate — centered symmetric square
+    face_h = f_bottom - f_top
+    face_w = f_right  - f_left
+    cx     = (f_left + f_right)  // 2
+    cy     = (f_top  + f_bottom) // 2
+    cy_adj = cy - int(face_h * 0.10)
+    half   = int(max(face_h, face_w) * 0.90)
+    ct = max(0,   cy_adj - half)
+    cb = min(h_f, cy_adj + half)
+    cl = max(0,   cx     - half)
+    cr = min(w_f, cx     + half)
     crop = frame[ct:cb, cl:cr]
     if crop.size == 0:
         return
