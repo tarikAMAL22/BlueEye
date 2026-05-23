@@ -484,8 +484,8 @@ def _create_body_alert(track: Track, cam: dict, cursor, conn):
         safe_execute(cursor, conn, """
             INSERT INTO alerts
               (personId, cameraId, zoneId, faceSnapshotUrl, bestFrameSnapshotUrl,
-               confidence, status, threatLevel)
-            VALUES (%s,%s,%s,%s,%s,%s,'active','high')
+               confidence, status, threatLevel, detectionType)
+            VALUES (%s,%s,%s,%s,%s,%s,'active','high','NO_FACE')
         """, (track.person_id, cam_id, zone_id, face_url, frame_url, track.confidence))
         track.alert_id       = cursor.lastrowid
         track.last_db_update = time.time()
