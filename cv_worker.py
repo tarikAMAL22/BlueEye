@@ -246,11 +246,28 @@ def detect_bodies_yolo(frame: np.ndarray, existing_face_boxes: list) -> list:
 
         body_bbox = (y1, x2, y2, x1)
 
+        # IoU is wrong here: face bbox ≈ 80×80px vs body bbox ≈ 200×500px
+        # → IoU always ≈ 0.06, never > 0.30. Use point-in-box instead.
         overlaps_face = False
+        b_t, b_r, b_b, b_l = body_bbox
         for face_bbox in existing_face_boxes:
-            if compute_iou(body_bbox, face_bbox) > 0.30:
+            f_t, f_r, f_b, f_l = face_bbox
+            face_cx = (f_l + f_r) / 2
+            face_cy = (f_t + f_b) / 2
+            TOL = 20
+            # Face center inside body bbox?
+            if (b_l - TOL <= face_cx <= b_r + TOL and
+                    b_t - TOL <= face_cy <= b_b + TOL):
                 overlaps_face = True
                 break
+            # Face top in upper 40% of body (head near top of body)?
+            body_h = b_b - b_t
+            if body_h > 0:
+                face_top_rel = (f_t - b_t) / body_h
+                face_cx_in   = b_l - TOL <= face_cx <= b_r + TOL
+                if face_cx_in and -0.1 <= face_top_rel <= 0.45:
+                    overlaps_face = True
+                    break
 
         if not overlaps_face:
             new_bodies.append((body_bbox, conf))
@@ -452,10 +469,13 @@ def _validate_body_image(body_img: np.ndarray) -> bool:
 
 def _create_body_alert(track: Track, cam: dict, cursor, conn):
     """
-    Create alert for a body_only track (YOLO detection, no face visible).
-    Person inserted as UNKNOWN with NULL faceEncoding.
-    Alert threatLevel = 'high'.
+    Called ONLY for tracks where face_recognition found NO face.
+    If a face track exists for the same person, Fix 2 prevents reaching here.
     """
+    if track.detection_type != 'body_only':
+        logger.warning(f"_create_body_alert called on non-body track {track.track_id} — skip")
+        return
+
     if not _validate_body_image(track.face_image):
         logger.warning(f"Body track {track.track_id}: invalid body image — skipping")
         return
@@ -809,10 +829,26 @@ def process_camera(cam: dict, matcher: FaceMatcher):
                         if tid and tracks[tid].detection_type == 'body_only':
                             tracks[tid].detection_type = 'face'
                             tracks[tid].enc_hash       = enc_hash
-                            logger.info(
-                                f"[{cam_name}] Track {tid} UPGRADED "
-                                f"body_only → face (enc_hash set)"
-                            )
+                            tracks[tid].face_encoding  = encoding
+                            logger.info(f"[{cam_name}] Track {tid} UPGRADED body_only → face")
+                            # Merge any duplicate face track with same enc_hash
+                            for other_tid, other_t in list(tracks.items()):
+                                if other_tid == tid:
+                                    continue
+                                if (other_t.cam_id == cam_id
+                                        and other_t.detection_type == 'face'
+                                        and other_t.enc_hash == enc_hash
+                                        and other_t.status != 'DONE'):
+                                    if other_t.alert_id and not tracks[tid].alert_id:
+                                        tracks[tid].alert_id  = other_t.alert_id
+                                        tracks[tid].person_id = other_t.person_id
+                                        tracks[tid].role      = other_t.role
+                                    other_t.status = 'DONE'
+                                    logger.info(
+                                        f"[{cam_name}] Merged duplicate track "
+                                        f"{other_tid} → {tid}"
+                                    )
+                                    break
 
                         if tid:
                             track = tracks[tid]
@@ -874,12 +910,36 @@ def process_camera(cam: dict, matcher: FaceMatcher):
                                             break
                                 continue
 
+                        # Find existing track (face OR body) covering this body bbox.
+                        # Point-in-box for face tracks; IoU for body tracks.
                         found_body_track = None
+                        b_t2, b_r2, b_b2, b_l2 = body_bbox
                         for _btid, _bt in list(tracks.items()):
-                            if _bt.cam_id == cam_id and _bt.status != 'DONE':
-                                if _bt.last_box and compute_iou(body_bbox, _bt.last_box) > 0.15:
+                            if _bt.cam_id != cam_id or _bt.status == 'DONE':
+                                continue
+                            if _bt.last_box is None:
+                                continue
+                            t_t, t_r, t_b, t_l = _bt.last_box
+                            if _bt.detection_type == 'face':
+                                face_cx2 = (t_l + t_r) / 2
+                                face_cy2 = (t_t + t_b) / 2
+                                TOL2 = 25
+                                if (b_l2 - TOL2 <= face_cx2 <= b_r2 + TOL2 and
+                                        b_t2 - TOL2 <= face_cy2 <= b_b2 + TOL2):
                                     found_body_track = _btid
                                     break
+                                track_h = t_b - t_t
+                                if track_h > 0 and (b_l2 - TOL2 <= face_cx2 <= b_r2 + TOL2):
+                                    found_body_track = _btid
+                                    break
+                            else:
+                                if compute_iou(body_bbox, _bt.last_box) > 0.15:
+                                    found_body_track = _btid
+                                    break
+
+                        # Face track already covers this person → YOLO skip
+                        if found_body_track and tracks[found_body_track].detection_type == 'face':
+                            continue
 
                         if found_body_track:
                             body_track = tracks[found_body_track]
