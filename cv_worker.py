@@ -182,8 +182,10 @@ def save_images(face_img: np.ndarray, full_frame: np.ndarray):
     uid = str(uuid.uuid4())
     face_path  = os.path.join(UPLOAD_DIR, f"face_{uid}.jpg")
     frame_path = os.path.join(UPLOAD_DIR, f"frame_{uid}.jpg")
+    # Face: maximum quality (95) — no aggressive compression
     cv2.imwrite(face_path,  face_img,   [int(cv2.IMWRITE_JPEG_QUALITY), 95])
-    cv2.imwrite(frame_path, full_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+    # Full frame: 85 acceptable (larger image, less critical)
+    cv2.imwrite(frame_path, full_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
     return f"/uploads/face_{uid}.jpg", f"/uploads/frame_{uid}.jpg"
 
 
@@ -231,31 +233,15 @@ def get_sr_model():
     return _sr_model
 
 
-def upscale_face(img: np.ndarray, max_upscale: float = 2.0) -> np.ndarray:
-    """
-    Upscale a face crop using super-resolution if available,
-    otherwise fall back to Lanczos. Never upscales more than max_upscale×.
-    """
+def upscale_face(img: np.ndarray) -> np.ndarray:
+    """Never upscale more than 1.5× — pixelation is worse than a small image."""
     h, w = img.shape[:2]
-    if h >= 128 and w >= 128:
-        return img   # already good resolution, no upscale needed
-
-    sr = get_sr_model()
-    if sr is not None:
-        try:
-            # EDSR requires RGB input
-            rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            upscaled = sr.upsample(rgb)
-            result = cv2.cvtColor(upscaled, cv2.COLOR_RGB2BGR)
-            logger.debug(f"SR: {h}×{w} → {result.shape[0]}×{result.shape[1]}")
-            return result
-        except Exception as e:
-            logger.debug(f"SR failed: {e}")
-
-    # Fallback: Lanczos capped at max_upscale×
-    scale = min(max_upscale, 128 / max(h, w, 1))
-    if scale > 1.0:
-        return cv2.resize(img, (int(w*scale), int(h*scale)),
+    if h >= 80 and w >= 80:
+        return img   # good enough — no upscale
+    # Very small face (< 80px): max 1.5× only
+    scale = min(1.5, 80 / max(h, w, 1))
+    if scale > 1.05:
+        return cv2.resize(img, (int(w * scale), int(h * scale)),
                           interpolation=cv2.INTER_LANCZOS4)
     return img
 
@@ -816,7 +802,16 @@ def _refresh_track(
     quality = frame_quality(crop, bbox, frame.shape)
     if quality > track.best_quality:
         face_img = crop.copy()
-        face_img = upscale_face(face_img)   # smart upscale: SR if available, Lanczos cap 2× otherwise
+        # Save at natural crop resolution — never upscale (upscaling creates pixelation).
+        # Downscale only if crop is abnormally large (> 800px).
+        h_img, w_img = face_img.shape[:2]
+        if h_img > 800 or w_img > 800:
+            scale = 800 / max(h_img, w_img)
+            face_img = cv2.resize(
+                face_img,
+                (int(w_img * scale), int(h_img * scale)),
+                interpolation=cv2.INTER_AREA,
+            )
         track.best_quality = quality
         track.face_image   = face_img
         track.full_frame   = frame.copy()
@@ -1151,10 +1146,13 @@ def process_camera(cam: dict, matcher: FaceMatcher):
 
                         if body_crop.size > 0 and not is_frame_corrupted(frame):
                             body_img = body_crop.copy()
-                            if body_img.shape[0] < 256:
+                            h_b, w_b = body_img.shape[:2]
+                            if h_b > 800 or w_b > 800:
+                                scale = 800 / max(h_b, w_b)
                                 body_img = cv2.resize(
-                                    body_img, (256, 256),
-                                    interpolation=cv2.INTER_LANCZOS4
+                                    body_img,
+                                    (int(w_b * scale), int(h_b * scale)),
+                                    interpolation=cv2.INTER_AREA,
                                 )
                             body_area = (b_bottom - b_top) * (b_right - b_left)
                             if body_area > body_track.best_quality:
