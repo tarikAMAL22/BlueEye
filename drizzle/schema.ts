@@ -91,7 +91,7 @@ export const alerts = mysqlTable("alerts", {
   faceSnapshotUrl: varchar("faceSnapshotUrl", { length: 512 }),
   bestFrameSnapshotUrl: varchar("bestFrameSnapshotUrl", { length: 512 }),
   confidence: decimal("confidence", { precision: 5, scale: 2 }).notNull(),
-  status: mysqlEnum("status", ["active", "acknowledged", "escalated", "dismissed", "pending_review"]).default("active").notNull(),
+  status: mysqlEnum("status", ["active", "acknowledged", "escalated", "dismissed", "pending_review", "completed"]).default("active").notNull(),
   threatLevel: mysqlEnum("threatLevel", ["low", "medium", "high", "critical"]).default("medium").notNull(),
   detectionType: mysqlEnum("detectionType", ["FACE", "NO_FACE"]).default("FACE").notNull(),
   faceQuality: mysqlEnum("faceQuality", ["CLEAR", "UNCLEAR", "NO_FACE"]).default("CLEAR").notNull(),

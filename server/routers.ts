@@ -329,7 +329,7 @@ export const appRouter = router({
         faceSnapshotUrl: z.string().optional(),
         bestFrameSnapshotUrl: z.string().optional(),
         confidence: z.number(),
-        status: z.enum(["active", "acknowledged", "escalated", "dismissed"]).default("active"),
+        status: z.enum(["active", "acknowledged", "escalated", "dismissed", "pending_review", "completed"]).default("active"),
         threatLevel: z.enum(["low", "medium", "high", "critical"]).default("medium"),
       }))
       .mutation(async ({ input }) => {
@@ -377,7 +377,7 @@ export const appRouter = router({
     updateStatus: protectedProcedure
       .input(z.object({
         id: z.number(),
-        status: z.enum(["active", "acknowledged", "escalated", "dismissed"]),
+        status: z.enum(["active", "acknowledged", "escalated", "dismissed", "pending_review", "completed"]),
       }))
       .mutation(async ({ input }) => {
         await db.updateAlert(input.id, { status: input.status });
