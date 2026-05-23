@@ -246,26 +246,28 @@ def detect_bodies_yolo(frame: np.ndarray, existing_face_boxes: list) -> list:
 
         body_bbox = (y1, x2, y2, x1)
 
-        # IoU is wrong here: face bbox ≈ 80×80px vs body bbox ≈ 200×500px
-        # → IoU always ≈ 0.06, never > 0.30. Use point-in-box instead.
         overlaps_face = False
         b_t, b_r, b_b, b_l = body_bbox
+        body_h = b_b - b_t
+
         for face_bbox in existing_face_boxes:
             f_t, f_r, f_b, f_l = face_bbox
+            # Face center point
             face_cx = (f_l + f_r) / 2
             face_cy = (f_t + f_b) / 2
-            TOL = 20
-            # Face center inside body bbox?
-            if (b_l - TOL <= face_cx <= b_r + TOL and
-                    b_t - TOL <= face_cy <= b_b + TOL):
+            # Tolerance: 15% of body height on each side
+            tol_x = max(20, int((b_r - b_l) * 0.15))
+            tol_y = max(20, int(body_h * 0.15))
+            # Is face center inside body bbox (with tolerance)?
+            if (b_l - tol_x <= face_cx <= b_r + tol_x and
+                    b_t - tol_y <= face_cy <= b_b + tol_y):
                 overlaps_face = True
                 break
-            # Face top in upper 40% of body (head near top of body)?
-            body_h = b_b - b_t
+            # Edge case: face top is in the upper 40% of body
+            # (person very close, face bbox top above body bbox top)
             if body_h > 0:
-                face_top_rel = (f_t - b_t) / body_h
-                face_cx_in   = b_l - TOL <= face_cx <= b_r + TOL
-                if face_cx_in and -0.1 <= face_top_rel <= 0.45:
+                rel = (f_t - b_t) / body_h
+                if -0.2 <= rel <= 0.40 and (b_l - tol_x <= face_cx <= b_r + tol_x):
                     overlaps_face = True
                     break
 
@@ -922,22 +924,28 @@ def process_camera(cam: dict, matcher: FaceMatcher):
                             tracks[tid].enc_hash       = enc_hash
                             tracks[tid].face_encoding  = encoding
                             logger.info(f"[{cam_name}] Track {tid} UPGRADED body_only → face")
-                            # Merge any duplicate face track with same enc_hash
-                            for other_tid, other_t in list(tracks.items()):
+
+                            # Merge: if a separate face track already exists for same encoding,
+                            # close it and transfer its alert_id to the upgraded track
+                            for other_tid in list(tracks.keys()):
                                 if other_tid == tid:
                                     continue
-                                if (other_t.cam_id == cam_id
-                                        and other_t.detection_type == 'face'
-                                        and other_t.enc_hash == enc_hash
-                                        and other_t.status != 'DONE'):
-                                    if other_t.alert_id and not tracks[tid].alert_id:
-                                        tracks[tid].alert_id  = other_t.alert_id
-                                        tracks[tid].person_id = other_t.person_id
-                                        tracks[tid].role      = other_t.role
-                                    other_t.status = 'DONE'
+                                ot = tracks[other_tid]
+                                if (ot.cam_id == cam_id
+                                        and ot.detection_type == 'face'
+                                        and ot.enc_hash == enc_hash
+                                        and ot.status != 'DONE'):
+                                    if ot.alert_id and not tracks[tid].alert_id:
+                                        tracks[tid].alert_id  = ot.alert_id
+                                        tracks[tid].person_id = ot.person_id
+                                        tracks[tid].role      = ot.role
+                                        tracks[tid].confidence = max(
+                                            tracks[tid].confidence, ot.confidence
+                                        )
+                                    ot.status = 'DONE'
                                     logger.info(
-                                        f"[{cam_name}] Merged duplicate track "
-                                        f"{other_tid} → {tid}"
+                                        f"[{cam_name}] Closed duplicate face track "
+                                        f"{other_tid} → merged into {tid}"
                                     )
                                     break
 
@@ -1005,30 +1013,35 @@ def process_camera(cam: dict, matcher: FaceMatcher):
                         # Point-in-box for face tracks; IoU for body tracks.
                         found_body_track = None
                         b_t2, b_r2, b_b2, b_l2 = body_bbox
-                        for _btid, _bt in list(tracks.items()):
-                            if _bt.cam_id != cam_id or _bt.status == 'DONE':
+                        bh2 = b_b2 - b_t2
+
+                        for tid, t in list(tracks.items()):
+                            if t.cam_id != cam_id or t.status == 'DONE':
                                 continue
-                            if _bt.last_box is None:
+                            if t.last_box is None:
                                 continue
-                            t_t, t_r, t_b, t_l = _bt.last_box
-                            if _bt.detection_type == 'face':
-                                face_cx2 = (t_l + t_r) / 2
-                                face_cy2 = (t_t + t_b) / 2
-                                TOL2 = 25
-                                if (b_l2 - TOL2 <= face_cx2 <= b_r2 + TOL2 and
-                                        b_t2 - TOL2 <= face_cy2 <= b_b2 + TOL2):
-                                    found_body_track = _btid
-                                    break
-                                track_h = t_b - t_t
-                                if track_h > 0 and (b_l2 - TOL2 <= face_cx2 <= b_r2 + TOL2):
-                                    found_body_track = _btid
+
+                            t_t, t_r, t_b, t_l = t.last_box
+
+                            if t.detection_type == 'face':
+                                # Face track: check face center inside body bbox
+                                fc_x = (t_l + t_r) / 2
+                                fc_y = (t_t + t_b) / 2
+                                tol  = max(25, int(bh2 * 0.15))
+                                in_x = b_l2 - tol <= fc_x <= b_r2 + tol
+                                in_y = b_t2 - tol <= fc_y <= b_b2 + tol
+                                # Also check relative position (face in top 40% of body)
+                                rel_y = (t_t - b_t2) / bh2 if bh2 > 0 else 1.0
+                                if (in_x and in_y) or (in_x and -0.2 <= rel_y <= 0.40):
+                                    found_body_track = tid
                                     break
                             else:
-                                if compute_iou(body_bbox, _bt.last_box) > 0.15:
-                                    found_body_track = _btid
+                                # Body track: standard IoU is fine (same bbox type)
+                                if compute_iou(body_bbox, t.last_box) > 0.15:
+                                    found_body_track = tid
                                     break
 
-                        # Face track already covers this person → YOLO skip
+                        # If matched a FACE track → this person already handled → skip
                         if found_body_track and tracks[found_body_track].detection_type == 'face':
                             continue
 
