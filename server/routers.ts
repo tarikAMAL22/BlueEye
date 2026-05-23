@@ -289,6 +289,111 @@ export const appRouter = router({
         }
         return await response.json();
       }),
+
+    /**
+     * Merge duplicate UNKNOWN persons on the same camera.
+     * Groups unknowns with face encoding distance < distanceThreshold and merges
+     * their alerts/events under the oldest person_id.
+     * Use dryRun: true (default) to preview before committing.
+     */
+    mergeCamera: protectedProcedure
+      .input(z.object({
+        cameraId:          z.number(),
+        distanceThreshold: z.number().min(0.1).max(0.6).default(0.45),
+        dryRun:            z.boolean().default(true),
+      }))
+      .mutation(async ({ input }) => {
+        const drizzleDb = await db.getDb();
+        if (!drizzleDb) throw new Error("DB unavailable");
+
+        // 1. Load all UNKNOWN persons for this camera with encodings
+        const rows = await drizzleDb.execute(sql`
+          SELECT DISTINCT p.id, p.name, p.faceEncoding, p.photoUrl,
+                 COUNT(a.id) AS alertCount,
+                 MIN(a.createdAt) AS firstSeen
+          FROM persons p
+          JOIN alerts a ON a.personId = p.id
+          WHERE p.role = 'UNKNOWN'
+            AND p.faceEncoding IS NOT NULL
+            AND a.cameraId = ${input.cameraId}
+          GROUP BY p.id
+          ORDER BY firstSeen ASC
+        `);
+
+        const unknowns = (rows[0] as any[]).map(r => ({
+          id:       r.id as number,
+          name:     r.name as string,
+          encoding: JSON.parse(r.faceEncoding) as number[],
+          photoUrl: r.photoUrl as string,
+          alertCount: Number(r.alertCount),
+        }));
+
+        // 2. Cluster by encoding distance (cosine approximation)
+        const merged: Array<{ keepId: number; mergeIds: number[] }> = [];
+        const assigned = new Set<number>();
+
+        for (let i = 0; i < unknowns.length; i++) {
+          if (assigned.has(unknowns[i].id)) continue;
+          const group = { keepId: unknowns[i].id, mergeIds: [] as number[] };
+
+          for (let j = i + 1; j < unknowns.length; j++) {
+            if (assigned.has(unknowns[j].id)) continue;
+            const a = unknowns[i].encoding;
+            const b = unknowns[j].encoding;
+            const dot  = a.reduce((s, v, k) => s + v * b[k], 0);
+            const magA = Math.sqrt(a.reduce((s, v) => s + v * v, 0));
+            const magB = Math.sqrt(b.reduce((s, v) => s + v * v, 0));
+            const dist = 1 - dot / (magA * magB + 1e-9);
+
+            if (dist < input.distanceThreshold) {
+              group.mergeIds.push(unknowns[j].id);
+              assigned.add(unknowns[j].id);
+            }
+          }
+
+          if (group.mergeIds.length > 0) {
+            merged.push(group);
+            assigned.add(unknowns[i].id);
+          }
+        }
+
+        if (input.dryRun) {
+          return {
+            dryRun:          true,
+            totalPersons:    unknowns.length,
+            groupsFound:     merged.length,
+            duplicatesFound: merged.reduce((s, g) => s + g.mergeIds.length, 0),
+            groups: merged.map(g => ({
+              keepId:   g.keepId,
+              mergeIds: g.mergeIds,
+              keepName: unknowns.find(p => p.id === g.keepId)?.name,
+            })),
+          };
+        }
+
+        // 3. Execute merge
+        let totalMerged = 0;
+        for (const group of merged) {
+          for (const dupId of group.mergeIds) {
+            await drizzleDb.execute(sql`
+              UPDATE alerts SET personId = ${group.keepId} WHERE personId = ${dupId}
+            `);
+            await drizzleDb.execute(sql`
+              UPDATE events SET personId = ${group.keepId} WHERE personId = ${dupId}
+            `);
+            await drizzleDb.execute(sql`
+              DELETE FROM persons WHERE id = ${dupId}
+            `);
+            totalMerged++;
+          }
+        }
+
+        return {
+          dryRun:      false,
+          groupsFound: merged.length,
+          merged:      totalMerged,
+        };
+      }),
   }),
 
   // ============ ALERTS (LIVE ALERTS FEED) ============

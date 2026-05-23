@@ -315,6 +315,78 @@ class FaceMatcher:
             return None, conf, None
 
 
+class UnknownMatcher:
+    """
+    Matches new face encodings against UNKNOWN persons already seen
+    on the same camera within the last UNKNOWN_MATCH_WINDOW seconds.
+    Prevents creating duplicate person records for the same individual.
+
+    Loaded per-camera, refreshed every 30 seconds.
+    """
+    UNKNOWN_MATCH_WINDOW = 3600   # 1 hour look-back for same-camera unknowns
+    UNKNOWN_MATCH_THR    = 0.45   # stricter than FaceMatcher (0.50) to avoid false merges
+
+    def __init__(self, cam_id: int):
+        self.cam_id     = cam_id
+        self._encs:  list = []
+        self._ids:   list = []
+        self._names: list = []
+        self._t:     float = 0.0
+        self._lock   = threading.Lock()
+
+    def load(self, conn, cursor):
+        """Refresh from DB every 30s."""
+        if time.time() - self._t < 30:
+            return
+        try:
+            since = time.strftime(
+                '%Y-%m-%d %H:%M:%S',
+                time.localtime(time.time() - self.UNKNOWN_MATCH_WINDOW)
+            )
+            safe_execute(cursor, conn, """
+                SELECT DISTINCT p.id, p.name, p.faceEncoding
+                FROM persons p
+                JOIN alerts a ON a.personId = p.id
+                WHERE p.role = 'UNKNOWN'
+                  AND p.faceEncoding IS NOT NULL
+                  AND a.cameraId = %s
+                  AND a.createdAt >= %s
+                ORDER BY p.id DESC
+                LIMIT 500
+            """, (self.cam_id, since))
+            rows = cursor.fetchall()
+            with self._lock:
+                self._encs  = [np.array(json.loads(r['faceEncoding'])) for r in rows]
+                self._ids   = [r['id']   for r in rows]
+                self._names = [r['name'] for r in rows]
+                self._t     = time.time()
+            if rows:
+                logger.debug(
+                    f"UnknownMatcher cam={self.cam_id}: "
+                    f"loaded {len(rows)} unknown persons"
+                )
+        except Exception as e:
+            logger.warning(f"UnknownMatcher load failed: {e}")
+
+    def find_match(self, encoding: np.ndarray):
+        """Returns (person_id, name) if a similar unknown was seen recently, else (None, None)."""
+        with self._lock:
+            if not self._encs:
+                return None, None
+            dists = face_recognition.face_distance(self._encs, encoding)
+            idx   = int(np.argmin(dists))
+            if dists[idx] < self.UNKNOWN_MATCH_THR:
+                return self._ids[idx], self._names[idx]
+            return None, None
+
+    def add(self, person_id: int, name: str, encoding: np.ndarray):
+        """Add a newly created person to the in-memory index immediately."""
+        with self._lock:
+            self._ids.append(person_id)
+            self._names.append(name)
+            self._encs.append(encoding)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # DB writers (INSERT first alert / UPDATE with better frame)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -333,24 +405,19 @@ def _validate_face_image(face_image: np.ndarray) -> bool:
         return False
 
 
-def create_alert(track: Track, cam: dict, cursor, conn):
-    """INSERT a new alert row for this track. Sets track.alert_id.
-    Fix 1: single save_images() call — persons.photoUrl and alerts.faceSnapshotUrl
-    point to the exact same file.
-    """
+def create_alert(track: Track, cam: dict, cursor, conn, unknown_matcher=None):
+    """INSERT a new alert row for this track. Sets track.alert_id."""
     if track.detection_type == 'body_only':
-        _create_body_alert(track, cam, cursor, conn)
+        _create_body_alert(track, cam, cursor, conn, unknown_matcher)
         return
 
     if track.face_image is None or track.face_encoding is None:
         return
 
-    # Fix 2: validate crop before any DB write
     if not _validate_face_image(track.face_image):
         logger.warning(f"create_alert: no face in crop for track {track.track_id} — skipping")
         return
 
-    # Fix 1: one save_images() call shared by person INSERT and alert INSERT
     face_url, frame_url = save_images(track.face_image, track.full_frame)
 
     cam_id  = cam.get('id')
@@ -358,18 +425,35 @@ def create_alert(track: Track, cam: dict, cursor, conn):
     threat  = 'high' if track.role == 'UNKNOWN' else 'medium'
     ev_type = 'recognition' if (track.role and track.role != 'UNKNOWN') else 'unknown'
 
-    # Create UNKNOWN person if needed (uses the same face_url)
+    # ── Ensure person exists — check UnknownMatcher FIRST ─────────────────────
     if not track.person_id:
+        if unknown_matcher is not None:
+            unknown_matcher.load(conn, cursor)
+            existing_id, existing_name = unknown_matcher.find_match(track.face_encoding)
+            if existing_id:
+                track.person_id = existing_id
+                track.role      = 'UNKNOWN'
+                logger.info(
+                    f"Track {track.track_id}: matched existing unknown "
+                    f"'{existing_name}' (pid={existing_id}) — no new person created"
+                )
+
+    if not track.person_id:
+        # Truly new person — create record
         try:
             uid      = str(uuid.uuid4())
+            name     = f"unknown-{uid[:8]}"
             enc_json = json.dumps(track.face_encoding.tolist())
             safe_execute(cursor, conn,
                 "INSERT INTO persons (name, role, photoUrl, faceEncoding) VALUES (%s,'UNKNOWN',%s,%s)",
-                (f"unknown-{uid[:8]}", face_url, enc_json)
+                (name, face_url, enc_json)
             )
             track.person_id = cursor.lastrowid
             track.role      = 'UNKNOWN'
             conn.commit()
+            if unknown_matcher is not None:
+                unknown_matcher.add(track.person_id, name, track.face_encoding)
+            logger.info(f"NEW unknown person created: '{name}' (pid={track.person_id})")
         except Exception as e:
             logger.error(f"Insert person failed: {e}")
             try:
@@ -467,7 +551,7 @@ def _validate_body_image(body_img: np.ndarray) -> bool:
     return h >= 30 and w >= 20
 
 
-def _create_body_alert(track: Track, cam: dict, cursor, conn):
+def _create_body_alert(track: Track, cam: dict, cursor, conn, unknown_matcher=None):
     """
     Called ONLY for tracks where face_recognition found NO face.
     If a face track exists for the same person, Fix 2 prevents reaching here.
@@ -695,6 +779,9 @@ def process_camera(cam: dict, matcher: FaceMatcher):
     tracks:             Dict[str, Track] = {}
     encoding_cooldowns: Dict[tuple, float] = {}
 
+    # Per-camera unknown person matcher — prevents duplicate person records
+    unknown_matcher = UnknownMatcher(cam_id)
+
     bg_sub = cv2.createBackgroundSubtractorMOG2(
         history=200, varThreshold=16, detectShadows=False
     )
@@ -730,6 +817,10 @@ def process_camera(cam: dict, matcher: FaceMatcher):
 
             frame_count += 1
             now = time.time()
+
+            # Refresh unknown matcher every ~30s (at 30fps ≈ 900 frames)
+            if frame_count % 900 == 1:
+                unknown_matcher.load(conn, cursor)
 
             # ════════════════════════════════════════════════════════════════
             # LAYER 1 — Motion detection (every frame, very fast)
@@ -874,7 +965,7 @@ def process_camera(cam: dict, matcher: FaceMatcher):
                         if (track.status == 'BUFFERING'
                                 and track.frame_count >= BUFFER_FRAMES
                                 and track.face_image is not None):
-                            create_alert(track, cam, cursor, conn)
+                            create_alert(track, cam, cursor, conn, unknown_matcher)
 
                         # ── UPDATE existing active alert with better frame ──────
                         elif track.status == 'ACTIVE' and track.alert_id:
@@ -988,7 +1079,7 @@ def process_camera(cam: dict, matcher: FaceMatcher):
                         if (body_track.status == 'BUFFERING'
                                 and body_track.frame_count >= BUFFER_FRAMES
                                 and body_track.face_image is not None):
-                            _create_body_alert(body_track, cam, cursor, conn)
+                            _create_body_alert(body_track, cam, cursor, conn, unknown_matcher)
 
             # ════════════════════════════════════════════════════════════════
             # LAYER 4 — Close LOST tracks (runs every frame)
