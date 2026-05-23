@@ -83,16 +83,21 @@ biometric_memory: Dict = {}
 bio_lock = threading.Lock()
 
 # YOLO body detector — loaded once at startup (lazy, thread-safe)
-_yolo_model = None
-_yolo_lock  = threading.Lock()
+_yolo_model     = None
+_yolo_lock      = threading.Lock()
+_yolo_available = True   # set to False on first import failure to suppress retry spam
 
 
 def get_yolo():
     """Lazy-load YOLOv8n once. Returns model or None if unavailable."""
-    global _yolo_model
+    global _yolo_model, _yolo_available
+    if not _yolo_available:
+        return None
     if _yolo_model is not None:
         return _yolo_model
     with _yolo_lock:
+        if not _yolo_available:
+            return None
         if _yolo_model is not None:
             return _yolo_model
         try:
@@ -102,7 +107,7 @@ def get_yolo():
             logger.info("YOLO body detector loaded (yolov8n)")
         except Exception as e:
             logger.warning(f"YOLO unavailable: {e} — body-only detection disabled")
-            _yolo_model = None
+            _yolo_available = False
     return _yolo_model
 
 
