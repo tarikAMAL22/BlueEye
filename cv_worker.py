@@ -70,6 +70,9 @@ ENCODING_DISTANCE_THR = 0.50    # face_recognition match threshold
 TRACKER_SCORE_THR     = 0.15    # min combined score to link detection to track
 MIN_FACE_HEIGHT_PX    = 40      # ignore tiny distant faces
 FACE_SCALE            = 0.5     # resize factor before face_recognition
+YOLO_CONF_THR         = 0.45    # YOLO person confidence threshold
+YOLO_BODY_COOLDOWN    = 90      # seconds before same body zone can re-alert
+MIN_BODY_HEIGHT_PX    = 60      # ignore tiny detections (< 60px = too far)
 
 # ── Shared locks ──────────────────────────────────────────────────────────────
 face_lock = threading.Lock()
@@ -78,6 +81,29 @@ stop_signals: Dict[int, bool] = {}
 # Global biometric memory {cam_id: [(encoding, timestamp)]}
 biometric_memory: Dict = {}
 bio_lock = threading.Lock()
+
+# YOLO body detector — loaded once at startup (lazy, thread-safe)
+_yolo_model = None
+_yolo_lock  = threading.Lock()
+
+
+def get_yolo():
+    """Lazy-load YOLOv8n once. Returns model or None if unavailable."""
+    global _yolo_model
+    if _yolo_model is not None:
+        return _yolo_model
+    with _yolo_lock:
+        if _yolo_model is not None:
+            return _yolo_model
+        try:
+            from ultralytics import YOLO
+            _yolo_model = YOLO("yolov8n.pt")
+            _yolo_model.fuse()
+            logger.info("YOLO body detector loaded (yolov8n)")
+        except Exception as e:
+            logger.warning(f"YOLO unavailable: {e} — body-only detection disabled")
+            _yolo_model = None
+    return _yolo_model
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -104,6 +130,7 @@ class Track:
     frame_count: int             = 0
     last_db_update: float        = 0.0
     status:      str             = "BUFFERING"  # BUFFERING | ACTIVE | DONE
+    detection_type: str          = "face"       # "face" | "body_only"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -145,6 +172,13 @@ def save_images(face_img: np.ndarray, full_frame: np.ndarray):
     return f"/uploads/face_{uid}.jpg", f"/uploads/frame_{uid}.jpg"
 
 
+def is_frame_corrupted(frame: np.ndarray) -> bool:
+    """Return True if frame is blank or unusable."""
+    if frame is None or frame.size == 0:
+        return True
+    return frame.mean() < 1.0
+
+
 def frame_quality(crop: np.ndarray, bbox: Tuple, frame_shape: Tuple) -> float:
     """Sharpness (center 50%) × frontal score × relative size."""
     f_top, f_right, f_bottom, f_left = bbox
@@ -176,6 +210,47 @@ def compute_iou(a: Tuple, b: Tuple) -> float:
     if inter == 0:
         return 0.0
     return inter / ((aB - aT) * (aR - aL) + (bB - bT) * (bR - bL) - inter)
+
+
+def detect_bodies_yolo(frame: np.ndarray, existing_face_boxes: list) -> list:
+    """
+    Run YOLO person detection on frame.
+    Returns body bboxes (top, right, bottom, left) that do NOT overlap
+    with already-detected face bboxes (IoU < 0.3) — bodies missed by face_recognition.
+    """
+    yolo = get_yolo()
+    if yolo is None:
+        return []
+
+    try:
+        results = yolo(frame, classes=[0], verbose=False)[0]
+    except Exception as e:
+        logger.debug(f"YOLO inference error: {e}")
+        return []
+
+    new_bodies = []
+    for box in results.boxes:
+        conf = float(box.conf[0])
+        if conf < YOLO_CONF_THR:
+            continue
+
+        x1, y1, x2, y2 = map(int, box.xyxy[0])
+        body_h = y2 - y1
+        if body_h < MIN_BODY_HEIGHT_PX:
+            continue
+
+        body_bbox = (y1, x2, y2, x1)
+
+        overlaps_face = False
+        for face_bbox in existing_face_boxes:
+            if compute_iou(body_bbox, face_bbox) > 0.30:
+                overlaps_face = True
+                break
+
+        if not overlaps_face:
+            new_bodies.append((body_bbox, conf))
+
+    return new_bodies
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -241,6 +316,10 @@ def create_alert(track: Track, cam: dict, cursor, conn):
     Fix 1: single save_images() call — persons.photoUrl and alerts.faceSnapshotUrl
     point to the exact same file.
     """
+    if track.detection_type == 'body_only':
+        _create_body_alert(track, cam, cursor, conn)
+        return
+
     if track.face_image is None or track.face_encoding is None:
         return
 
@@ -354,6 +433,77 @@ def update_alert(track: Track, cam: dict, cursor, conn):
             conn.rollback()
         except Exception:
             pass
+
+
+def _validate_body_image(body_img: np.ndarray) -> bool:
+    """Basic validation for body crops — does NOT require a face."""
+    if body_img is None or body_img.size == 0:
+        return False
+    if is_frame_corrupted(body_img):
+        return False
+    h, w = body_img.shape[:2]
+    return h >= 30 and w >= 20
+
+
+def _create_body_alert(track: Track, cam: dict, cursor, conn):
+    """
+    Create alert for a body_only track (YOLO detection, no face visible).
+    Person inserted as UNKNOWN with NULL faceEncoding.
+    Alert threatLevel = 'high'.
+    """
+    if not _validate_body_image(track.face_image):
+        logger.warning(f"Body track {track.track_id}: invalid body image — skipping")
+        return
+
+    face_url, frame_url = save_images(track.face_image, track.full_frame)
+    cam_id  = cam.get('id')
+    zone_id = cam.get('zoneId', 1)
+
+    try:
+        uid  = str(uuid.uuid4())
+        name = f"body-only-{uid[:8]}"
+        safe_execute(cursor, conn,
+            "INSERT INTO persons (name, role, photoUrl, faceEncoding) "
+            "VALUES (%s,'UNKNOWN',%s,NULL)",
+            (name, face_url)
+        )
+        track.person_id = cursor.lastrowid
+        track.role      = 'UNKNOWN'
+        conn.commit()
+    except Exception as e:
+        logger.error(f"Body person insert failed: {e}")
+        conn.rollback()
+        return
+
+    try:
+        safe_execute(cursor, conn, """
+            INSERT INTO alerts
+              (personId, cameraId, zoneId, faceSnapshotUrl, bestFrameSnapshotUrl,
+               confidence, status, threatLevel)
+            VALUES (%s,%s,%s,%s,%s,%s,'active','high')
+        """, (track.person_id, cam_id, zone_id, face_url, frame_url, track.confidence))
+        track.alert_id       = cursor.lastrowid
+        track.last_db_update = time.time()
+        conn.commit()
+
+        safe_execute(cursor, conn, """
+            INSERT INTO events
+              (personId, cameraId, zoneId, faceSnapshotUrl, bestFrameSnapshotUrl,
+               confidence, eventType)
+            VALUES (%s,%s,%s,%s,%s,%s,'body_detected')
+        """, (track.person_id, cam_id, zone_id, face_url, frame_url, track.confidence))
+        conn.commit()
+
+        logger.info(
+            f"BODY ALERT #{track.alert_id} CREATED — "
+            f"pid={track.person_id} cam={cam.get('name')} "
+            f"conf={track.confidence:.1f}%"
+        )
+        track.status = 'ACTIVE'
+
+    except Exception as e:
+        logger.error(f"Body alert INSERT failed: {e}")
+        conn.rollback()
 
 
 def log_motion_event(cam_id: int, zone_id: int, frame: np.ndarray,
@@ -650,6 +800,15 @@ def process_camera(cam: dict, matcher: FaceMatcher):
                             tracks, bbox, encoding, enc_hash, cam_id
                         )
 
+                        # ── Upgrade body_only track if face now visible ────────
+                        if tid and tracks[tid].detection_type == 'body_only':
+                            tracks[tid].detection_type = 'face'
+                            tracks[tid].enc_hash       = enc_hash
+                            logger.info(
+                                f"[{cam_name}] Track {tid} UPGRADED "
+                                f"body_only → face (enc_hash set)"
+                            )
+
                         if tid:
                             track = tracks[tid]
                         else:
@@ -679,6 +838,92 @@ def process_camera(cam: dict, matcher: FaceMatcher):
                         # ── UPDATE existing active alert with better frame ──────
                         elif track.status == 'ACTIVE' and track.alert_id:
                             update_alert(track, cam, cursor, conn)
+
+                    # ════════════════════════════════════════════════════════
+                    # LAYER 2b — YOLO body detection
+                    # Catches people missed by face_recognition:
+                    # backs turned, profiles, distant, low-light
+                    # ════════════════════════════════════════════════════════
+                    face_boxes_found = [
+                        (int(b[0] * scale_inv), int(b[1] * scale_inv),
+                         int(b[2] * scale_inv), int(b[3] * scale_inv))
+                        for b in face_locs
+                    ]
+
+                    body_detections = detect_bodies_yolo(frame, face_boxes_found)
+
+                    for body_bbox, body_conf in body_detections:
+                        b_top, b_right, b_bottom, b_left = body_bbox
+                        body_h  = b_bottom - b_top
+                        body_cx = (b_left + b_right) // 2
+
+                        body_hash = (cam_id, body_cx // 50, b_top // 50)
+
+                        if body_hash in encoding_cooldowns:
+                            if now - encoding_cooldowns[body_hash] < YOLO_BODY_COOLDOWN:
+                                for _btid, _bt in tracks.items():
+                                    if _bt.cam_id == cam_id and _bt.detection_type == 'body_only':
+                                        if _bt.last_box and compute_iou(body_bbox, _bt.last_box) > 0.10:
+                                            _bt.last_seen = now
+                                            _bt.last_box  = body_bbox
+                                            break
+                                continue
+
+                        found_body_track = None
+                        for _btid, _bt in list(tracks.items()):
+                            if _bt.cam_id == cam_id and _bt.status != 'DONE':
+                                if _bt.last_box and compute_iou(body_bbox, _bt.last_box) > 0.15:
+                                    found_body_track = _btid
+                                    break
+
+                        if found_body_track:
+                            body_track = tracks[found_body_track]
+                            body_track.last_seen   = now
+                            body_track.last_box    = body_bbox
+                            body_track.frame_count += 1
+                        else:
+                            new_id = f"body_{uuid.uuid4().hex[:8]}"
+                            body_track = Track(
+                                track_id       = new_id,
+                                cam_id         = cam_id,
+                                enc_hash       = None,
+                                detection_type = 'body_only',
+                            )
+                            body_track.last_box   = body_bbox
+                            body_track.confidence = round(body_conf * 100, 2)
+                            tracks[new_id] = body_track
+                            encoding_cooldowns[body_hash] = now
+                            logger.info(
+                                f"[{cam_name}] NEW body_only track {new_id} "
+                                f"conf={body_conf:.2f} h={body_h}px"
+                            )
+
+                        h_f2, w_f2 = frame.shape[:2]
+                        pad_b = int(body_h * 0.05)
+                        bt = max(0,    b_top    - pad_b)
+                        bb = min(h_f2, b_bottom + pad_b)
+                        bl = max(0,    b_left   - pad_b)
+                        br = min(w_f2, b_right  + pad_b)
+                        body_crop = frame[bt:bb, bl:br]
+
+                        if body_crop.size > 0 and not is_frame_corrupted(frame):
+                            body_img = body_crop.copy()
+                            if body_img.shape[0] < 256:
+                                body_img = cv2.resize(
+                                    body_img, (256, 256),
+                                    interpolation=cv2.INTER_LANCZOS4
+                                )
+                            body_area = (b_bottom - b_top) * (b_right - b_left)
+                            if body_area > body_track.best_quality:
+                                body_track.best_quality = float(body_area)
+                                body_track.face_image   = body_img
+                                body_track.full_frame   = frame.copy()
+                                body_track.crop_coords  = (bt, bb, bl, br)
+
+                        if (body_track.status == 'BUFFERING'
+                                and body_track.frame_count >= BUFFER_FRAMES
+                                and body_track.face_image is not None):
+                            _create_body_alert(body_track, cam, cursor, conn)
 
             # ════════════════════════════════════════════════════════════════
             # LAYER 4 — Close LOST tracks (runs every frame)
