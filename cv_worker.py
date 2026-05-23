@@ -104,6 +104,13 @@ def get_yolo():
             from ultralytics import YOLO
             _yolo_model = YOLO("yolov8n.pt")
             _yolo_model.fuse()
+            # Move YOLO to GPU if available
+            import torch
+            if torch.cuda.is_available():
+                _yolo_model = _yolo_model.to('cuda')
+                logger.info(f"✅ YOLO on GPU: {torch.cuda.get_device_name(0)}")
+            else:
+                logger.warning("⚠️  YOLO running on CPU — CUDA not available")
             logger.info("YOLO body detector loaded (yolov8n)")
         except Exception as e:
             logger.warning(f"YOLO unavailable: {e} — body-only detection disabled")
@@ -182,6 +189,72 @@ def is_frame_corrupted(frame: np.ndarray) -> bool:
     if frame is None or frame.size == 0:
         return True
     return frame.mean() < 1.0
+
+
+# Super-resolution upscaler — loaded once, optional
+_sr_model = None
+_sr_lock  = threading.Lock()
+
+
+def get_sr_model():
+    """
+    Lazy-load OpenCV DNN super-resolution (EDSR x2).
+    Returns model or None if unavailable.
+    Model file auto-downloaded if missing.
+    """
+    global _sr_model
+    if _sr_model is not None:
+        return _sr_model
+    with _sr_lock:
+        if _sr_model is not None:
+            return _sr_model
+        try:
+            from cv2 import dnn_superres
+            sr = dnn_superres.DnnSuperResImpl_create()
+            model_path = "/app/EDSR_x2.pb"
+            if not os.path.exists(model_path):
+                # Download EDSR x2 model (~38MB)
+                import urllib.request
+                url = "https://github.com/Saafke/EDSR_Tensorflow/raw/master/models/EDSR_x2.pb"
+                logger.info("Downloading EDSR super-res model...")
+                urllib.request.urlretrieve(url, model_path)
+            sr.readModel(model_path)
+            sr.setModel("edsr", 2)
+            _sr_model = sr
+            logger.info("✅ Super-resolution model loaded (EDSR x2)")
+        except Exception as e:
+            logger.warning(f"Super-res unavailable: {e} — using standard resize")
+            _sr_model = None
+    return _sr_model
+
+
+def upscale_face(img: np.ndarray, max_upscale: float = 2.0) -> np.ndarray:
+    """
+    Upscale a face crop using super-resolution if available,
+    otherwise fall back to Lanczos. Never upscales more than max_upscale×.
+    """
+    h, w = img.shape[:2]
+    if h >= 128 and w >= 128:
+        return img   # already good resolution, no upscale needed
+
+    sr = get_sr_model()
+    if sr is not None:
+        try:
+            # EDSR requires RGB input
+            rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            upscaled = sr.upsample(rgb)
+            result = cv2.cvtColor(upscaled, cv2.COLOR_RGB2BGR)
+            logger.debug(f"SR: {h}×{w} → {result.shape[0]}×{result.shape[1]}")
+            return result
+        except Exception as e:
+            logger.debug(f"SR failed: {e}")
+
+    # Fallback: Lanczos capped at max_upscale×
+    scale = min(max_upscale, 128 / max(h, w, 1))
+    if scale > 1.0:
+        return cv2.resize(img, (int(w*scale), int(h*scale)),
+                          interpolation=cv2.INTER_LANCZOS4)
+    return img
 
 
 def frame_quality(crop: np.ndarray, bbox: Tuple, frame_shape: Tuple) -> float:
@@ -740,9 +813,7 @@ def _refresh_track(
     quality = frame_quality(crop, bbox, frame.shape)
     if quality > track.best_quality:
         face_img = crop.copy()
-        if face_img.shape[0] < 512:
-            face_img = cv2.resize(face_img, (512, 512),
-                                  interpolation=cv2.INTER_LANCZOS4)
+        face_img = upscale_face(face_img)   # smart upscale: SR if available, Lanczos cap 2× otherwise
         track.best_quality = quality
         track.face_image   = face_img
         track.full_frame   = frame.copy()
@@ -1168,14 +1239,31 @@ def process_camera(cam: dict, matcher: FaceMatcher):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _log_gpu_status():
+    """Log GPU status for all compute components at startup."""
+    # dlib/face_recognition
     try:
         import dlib
-        cuda = getattr(dlib, 'DLIB_USE_CUDA', False)
-        logger.info(f"{'GPU (CUDA)' if cuda else 'CPU only'} — dlib.DLIB_USE_CUDA={cuda}")
-        if cuda:
-            logger.info(f"CUDA devices available: {dlib.cuda.get_num_devices()}")
+        cuda_dlib = getattr(dlib, 'DLIB_USE_CUDA', False)
+        n_devices = dlib.cuda.get_num_devices() if cuda_dlib else 0
+        logger.info(
+            f"face_recognition: {'CNN+CUDA' if (USE_CNN_DETECTOR and cuda_dlib) else 'HOG/CPU'} "
+            f"| dlib.DLIB_USE_CUDA={cuda_dlib} | devices={n_devices}"
+        )
     except Exception as e:
-        logger.warning(f"GPU check failed: {e}")
+        logger.warning(f"dlib GPU check: {e}")
+
+    # PyTorch / YOLO
+    try:
+        import torch
+        if torch.cuda.is_available():
+            logger.info(
+                f"PyTorch CUDA: {torch.cuda.get_device_name(0)} "
+                f"| VRAM: {torch.cuda.get_device_properties(0).total_memory // 1024**2}MB"
+            )
+        else:
+            logger.warning("PyTorch: CUDA not available — YOLO on CPU")
+    except Exception as e:
+        logger.warning(f"PyTorch GPU check: {e}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

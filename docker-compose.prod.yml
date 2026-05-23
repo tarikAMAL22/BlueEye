@@ -57,7 +57,7 @@ services:
       - BLUR_THRESHOLD=80
       - FACE_MATCH_HIGH=0.35
       - FACE_MATCH_MED=0.45
-      - USE_CNN_DETECTOR=false
+      - USE_CNN_DETECTOR=true
       - USE_YOLO_DETECTOR=true
       - CV_WORKER_IN_DOCKER=true
     depends_on:
