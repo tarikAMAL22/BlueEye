@@ -52,6 +52,9 @@ DB_USER     = os.environ.get("DB_USER",     "root")
 DB_PASSWORD = os.environ.get("DB_PASSWORD", "my-secret-pw")
 DB_NAME     = os.environ.get("DB_NAME",     "blueeye")
 
+USE_CNN_DETECTOR = os.environ.get("USE_CNN_DETECTOR", "true").lower() == "true"
+det_model        = "cnn" if USE_CNN_DETECTOR else "hog"
+
 _IS_DOCKER = os.environ.get("CV_WORKER_IN_DOCKER", "false").lower() == "true"
 UPLOAD_DIR = (
     "/app/client/public/uploads"
@@ -917,7 +920,7 @@ def process_camera(cam: dict, matcher: FaceMatcher):
                 rgb_sm = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
 
                 with face_lock:
-                    face_locs = face_recognition.face_locations(rgb_sm)
+                    face_locs = face_recognition.face_locations(rgb_sm, model=det_model)
 
                 if face_locs and len(face_locs) < 15:
                     with face_lock:
