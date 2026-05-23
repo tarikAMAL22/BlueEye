@@ -148,9 +148,15 @@ export const appRouter = router({
 
   // ============ PERSONS (PERSON REGISTRY) ============
   persons: router({
-    list: protectedProcedure.query(async () => {
-      return db.getPersons();
-    }),
+    list: protectedProcedure
+      .input(z.object({
+        detectionType: z.enum(['face', 'body_only', 'all']).default('all'),
+        role:          z.string().optional(),
+        search:        z.string().optional(),
+      }).optional())
+      .query(async ({ input }) => {
+        return db.getPersons(input ?? {});
+      }),
     
     getById: protectedProcedure
       .input(z.object({ id: z.number() }))

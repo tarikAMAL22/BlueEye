@@ -71,6 +71,7 @@ export const persons = mysqlTable("persons", {
   faceEncoding: json("faceEncoding").$type<number[]>(),
   faceEncodings: json("faceEncodings").$type<number[][]>(),
   isBlacklisted: boolean("isBlacklisted").default(false).notNull(),
+  detectionType: varchar("detectionType", { length: 20 }).default("face"),
   zonePermissions: json("zonePermissions").$type<{ zoneId: number; allowed: boolean }[]>(),
   activityHistory: json("activityHistory").$type<{ timestamp: number; action: string }[]>(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),

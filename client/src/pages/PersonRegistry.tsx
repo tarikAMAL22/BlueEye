@@ -11,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Plus, Edit, Trash2, User, Shield, Eye, Sparkles,
   Search, Fingerprint, Ghost, CheckCircle2, AlertTriangle,
-  UserCheck, X, Camera, Clock,
+  UserCheck, X, Camera, Clock, Footprints,
 } from "lucide-react";
 import { useForm, Controller } from "react-hook-form";
 import { toast } from "sonner";
@@ -134,7 +134,18 @@ export default function PersonRegistry() {
     return persons
       .filter((p: any) =>
         !p.isBlacklisted &&
-        (p.role.toLowerCase() === "unknown" || p.name.toLowerCase().startsWith("unknown-"))
+        (p.role.toLowerCase() === "unknown" || p.name.toLowerCase().startsWith("unknown-")) &&
+        !p.name.toLowerCase().startsWith("body-only-")
+      )
+      .filter((p: any) => p.name.toLowerCase().includes(unknownSearch.toLowerCase()));
+  }, [persons, unknownSearch]);
+
+  const bodyOnlyPersons = useMemo(() => {
+    if (!persons) return [];
+    return persons
+      .filter((p: any) =>
+        p.name.toLowerCase().startsWith("body-only-") ||
+        p.detectionType === "body_only"
       )
       .filter((p: any) => p.name.toLowerCase().includes(unknownSearch.toLowerCase()));
   }, [persons, unknownSearch]);
@@ -239,6 +250,13 @@ export default function PersonRegistry() {
               Unknown Detections
               <Badge variant="secondary" className="ml-1 px-1.5 py-0 text-[10px] bg-purple-500/20 text-purple-300 border-none">
                 {unknownPersons.length}
+              </Badge>
+            </TabsTrigger>
+            <TabsTrigger value="body_only" className="gap-2 px-4 py-2 data-[state=active]:bg-orange-600 data-[state=active]:text-white">
+              <Footprints className="w-4 h-4" />
+              Body-Only
+              <Badge variant="secondary" className="ml-1 px-1.5 py-0 text-[10px] bg-orange-500/20 text-orange-300 border-none">
+                {bodyOnlyPersons.length}
               </Badge>
             </TabsTrigger>
           </TabsList>
@@ -520,6 +538,89 @@ export default function PersonRegistry() {
                       <TableRow>
                         <TableCell colSpan={6} className="h-32 text-center text-muted-foreground italic">
                           No unknown detections found.
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Body-Only Detections */}
+        <TabsContent value="body_only" className="mt-0">
+          <Card className="glow-card bg-card/50 backdrop-blur border-border/50 overflow-hidden border-orange-500/20">
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader className="bg-orange-500/5">
+                    <TableRow className="border-border/50 hover:bg-transparent">
+                      <TableHead className="w-[80px]">Capture</TableHead>
+                      <TableHead>ID temporaire</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Première détection</TableHead>
+                      <TableHead className="text-right pr-6">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {isLoading ? (
+                      [1, 2].map(i => (
+                        <TableRow key={i} className="border-border/50">
+                          <TableCell><Skeleton className="w-10 h-10 rounded" /></TableCell>
+                          <TableCell><Skeleton className="h-4 w-32" /></TableCell>
+                          <TableCell><Skeleton className="h-6 w-20 rounded-full" /></TableCell>
+                          <TableCell><Skeleton className="h-4 w-20" /></TableCell>
+                          <TableCell><Skeleton className="h-8 w-16 ml-auto" /></TableCell>
+                        </TableRow>
+                      ))
+                    ) : bodyOnlyPersons.length > 0 ? (
+                      bodyOnlyPersons.map((person: any) => (
+                        <TableRow key={person.id} className="border-border/50 hover:bg-orange-500/5 group transition-colors">
+                          <TableCell className="pl-6">
+                            <div className="w-12 h-12 rounded-lg bg-orange-500/10 flex items-center justify-center border border-orange-500/20 group-hover:border-orange-500/40 transition-all overflow-hidden shadow-inner">
+                              {person.photoUrl ? (
+                                <img src={person.photoUrl} alt={person.name} className="w-full h-full object-cover" />
+                              ) : (
+                                <Footprints className="w-6 h-6 text-orange-400" />
+                              )}
+                            </div>
+                          </TableCell>
+                          <TableCell className="font-mono text-sm text-orange-300">{person.name}</TableCell>
+                          <TableCell>
+                            <Badge variant="outline" className="bg-orange-500/10 text-orange-400 border-orange-500/30 px-2.5 py-0.5">
+                              BODY ONLY
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-xs font-medium text-muted-foreground">
+                            {new Date(person.createdAt).toLocaleDateString()}
+                          </TableCell>
+                          <TableCell className="text-right pr-6">
+                            <div className="flex gap-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                onClick={() => setLocation(`/persons/${person.id}`)}
+                                className="h-8 w-8 text-blue-400 hover:text-blue-300 hover:bg-blue-400/10"
+                              >
+                                <Eye className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                onClick={() => handleDelete(person.id)}
+                                className="h-8 w-8 text-red-500 hover:text-red-600 hover:bg-red-500/10"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    ) : (
+                      <TableRow>
+                        <TableCell colSpan={5} className="h-32 text-center text-muted-foreground italic">
+                          Aucune détection body-only enregistrée.
                         </TableCell>
                       </TableRow>
                     )}

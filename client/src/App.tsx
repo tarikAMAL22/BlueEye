@@ -25,6 +25,7 @@ import Reports from "./pages/Reports";
 import PersonTimeline from "./pages/PersonTimeline";
 import ZoneHeatmap from "./pages/ZoneHeatmap";
 import ReviewQueue from "./pages/ReviewQueue";
+import MotionsPage from "./pages/Motions";
 import { useAuth } from "./_core/hooks/useAuth";
 
 function Router() {
@@ -77,6 +78,7 @@ function Router() {
         <Route path={"/access-groups"}>{isAdmin ? <AccessGroups /> : <Forbidden />}</Route>
         <Route path={"/reports"}>{isAdmin ? <Reports /> : <Forbidden />}</Route>
         <Route path={"/review-queue"}>{isAdmin ? <ReviewQueue /> : <Forbidden />}</Route>
+        <Route path={"/motions"}>{isAdmin ? <MotionsPage /> : <Forbidden />}</Route>
         <Route path={"/settings"}>{isAdmin ? <SystemSettings /> : <Forbidden />}</Route>
         
         <Route path={"/404"} component={NotFound} />

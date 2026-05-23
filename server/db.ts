@@ -170,10 +170,30 @@ export async function deleteZone(id: number) {
 
 // ============ PERSON QUERIES ============
 
-export async function getPersons() {
+export async function getPersons(filters: {
+  detectionType?: 'face' | 'body_only' | 'all';
+  role?: string;
+  search?: string;
+} = {}) {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(persons).orderBy(desc(persons.createdAt));
+
+  const conditions = [];
+  if (filters.detectionType && filters.detectionType !== 'all') {
+    conditions.push(eq(persons.detectionType, filters.detectionType));
+  }
+  if (filters.role) {
+    conditions.push(eq(persons.role, filters.role));
+  }
+  if (filters.search) {
+    conditions.push(like(persons.name, `%${filters.search}%`));
+  }
+
+  const q = db.select().from(persons);
+  const ordered = conditions.length
+    ? (q as any).where(and(...conditions)).orderBy(desc(persons.createdAt))
+    : q.orderBy(desc(persons.createdAt));
+  return ordered;
 }
 
 export async function getPersonById(id: number) {
@@ -236,6 +256,7 @@ const SAFE_PERSON_COLS = {
   role:          persons.role,
   photoUrl:      persons.photoUrl,
   isBlacklisted: persons.isBlacklisted,
+  detectionType: persons.detectionType,
 } as const;
 
 export async function getAlerts(filters: {
