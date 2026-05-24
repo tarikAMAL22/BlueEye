@@ -263,6 +263,7 @@ export async function getAlerts(filters: {
   limit?: number;
   status?: string;
   zoneId?: number;
+  cameraId?: number;
   personId?: number;
   startDate?: string;
   endDate?: string;
@@ -289,6 +290,9 @@ export async function getAlerts(filters: {
   }
   if (filters.zoneId) {
     conditions.push(eq(alerts.zoneId, filters.zoneId));
+  }
+  if (filters.cameraId) {
+    conditions.push(eq(alerts.cameraId, filters.cameraId));
   }
   if (filters.personId) {
     conditions.push(eq(alerts.personId, filters.personId));

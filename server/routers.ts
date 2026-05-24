@@ -5,6 +5,7 @@ import { publicProcedure, router, protectedProcedure, adminProcedure } from "./_
 import { z } from "zod";
 import * as db from "./db";
 import { motionsRouter } from "./routers/motions";
+import { streamRouter } from "./routers/stream";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -96,6 +97,36 @@ export const appRouter = router({
       .mutation(async ({ input }) => {
         return db.deleteCamera(input.id);
       }),
+
+    alertsSummary: protectedProcedure.query(async () => {
+      const drizzleDb = await db.getDb();
+      if (!drizzleDb) return [];
+      const rows = await drizzleDb.execute(sql`
+        SELECT
+          c.id,
+          c.name,
+          c.location,
+          c.zoneId,
+          c.status,
+          COUNT(CASE WHEN a.status IN ('active','escalated') THEN 1 END) AS activeAlerts,
+          (SELECT faceSnapshotUrl FROM alerts
+           WHERE cameraId = c.id AND faceSnapshotUrl IS NOT NULL
+           ORDER BY timestamp DESC LIMIT 1) AS lastSnapshot
+        FROM cameras c
+        LEFT JOIN alerts a ON a.cameraId = c.id
+        GROUP BY c.id, c.name, c.location, c.zoneId, c.status
+        ORDER BY activeAlerts DESC, c.id
+      `);
+      return (rows[0] as unknown as any[]).map(r => ({
+        id:           Number(r.id),
+        name:         r.name as string,
+        location:     r.location as string | null,
+        zoneId:       r.zoneId ? Number(r.zoneId) : null,
+        status:       r.status as string,
+        activeAlerts: Number(r.activeAlerts),
+        lastSnapshot: r.lastSnapshot as string | null,
+      }));
+    }),
   }),
 
   // ============ ZONES ============
@@ -409,6 +440,7 @@ export const appRouter = router({
         limit: z.number().default(50),
         status: z.string().optional(),
         zoneId: z.number().optional(),
+        cameraId: z.number().optional(),
         personId: z.number().optional(),
         startDate: z.string().optional(),
         endDate: z.string().optional(),
@@ -756,6 +788,7 @@ export const appRouter = router({
   }),
 
   motions: motionsRouter,
+  stream: streamRouter,
 
   movements: router({
     list: protectedProcedure

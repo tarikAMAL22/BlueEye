@@ -28,6 +28,8 @@ services:
       - DATABASE_URL=mysql://root:my-secret-pw@db:3306/blueeye
       - NODE_ENV=development
       - MEDIAMTX_INTERNAL_URL=http://mediamtx:8888
+      - STREAM_SERVER_URL=http://stream-server:33253
+      - PUBLIC_URL=http://localhost:33253
     depends_on:
       - db
     volumes:
@@ -115,6 +117,28 @@ services:
     depends_on:
       - mediamtx
     restart: unless-stopped
+
+  stream-server:
+    build:
+      context: ./stream-server
+    container_name: blueeye-stream-server
+    ports:
+      - "33253:33253"
+    environment:
+      - PORT=33253
+      - DB_HOST=db
+      - DB_USER=root
+      - DB_PASSWORD=my-secret-pw
+      - DB_NAME=blueeye
+      - HLS_DIR=/tmp/hls
+      - IDLE_TIMEOUT_MS=60000
+    volumes:
+      - "C:/sources/Video Server Tests/videos:/videos:ro"
+    depends_on:
+      - db
+    restart: unless-stopped
+    networks:
+      - blueeye-network
 
 networks:
   blueeye-network:

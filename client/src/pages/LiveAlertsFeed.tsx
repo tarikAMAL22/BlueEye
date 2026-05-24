@@ -2,6 +2,8 @@ import { useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { AnimatePresence, motion } from "framer-motion";
 import { AlertCard } from "@/components/dashboard/AlertCard";
+import { CameraCard } from "@/components/CameraCard";
+import { LiveStreamModal } from "@/components/LiveStreamModal";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -9,33 +11,45 @@ import { Label } from "@/components/ui/label";
 import { RefreshCw, AlertCircle, Filter, X } from "lucide-react";
 
 export default function LiveAlertsFeed() {
-  const [filterStatus,    setFilterStatus]    = useState<string>("all");
-  const [filterZoneId,    setFilterZoneId]    = useState<string>("all");
-  const [filterThreat,    setFilterThreat]    = useState<string>("all");
-  const [autoRefresh,     setAutoRefresh]     = useState(true);
+  const [filterStatus,      setFilterStatus]      = useState<string>("all");
+  const [filterZoneId,      setFilterZoneId]      = useState<string>("all");
+  const [filterThreat,      setFilterThreat]      = useState<string>("all");
+  const [selectedCameraId,  setSelectedCameraId]  = useState<number | null>(null);
+  const [liveCamera,        setLiveCamera]        = useState<{ id: number; name: string } | null>(null);
+  const [autoRefresh,       setAutoRefresh]       = useState(true);
 
   const { data: alerts, isLoading, error, refetch } = trpc.alerts.list.useQuery(
     {
-      limit:      100,
-      status:     filterStatus !== "all" ? filterStatus     : undefined,
-      zoneId:     filterZoneId !== "all" ? parseInt(filterZoneId) : undefined,
-      threatLevel: filterThreat !== "all" ? filterThreat    : undefined,
+      limit:       100,
+      status:      filterStatus !== "all" ? filterStatus     : undefined,
+      zoneId:      filterZoneId !== "all" ? parseInt(filterZoneId) : undefined,
+      threatLevel: filterThreat !== "all" ? filterThreat     : undefined,
+      cameraId:    selectedCameraId ?? undefined,
     },
     { refetchInterval: autoRefresh ? 5000 : false }
   );
 
-  const { data: zonesList }   = trpc.zones.list.useQuery();
-  const { data: camerasList } = trpc.cameras.list.useQuery();
+  const { data: zonesList }    = trpc.zones.list.useQuery();
+  const { data: camerasList }  = trpc.cameras.list.useQuery();
+  const { data: cameraSummary, isLoading: camsLoading } = trpc.cameras.alertsSummary.useQuery(
+    undefined,
+    { refetchInterval: autoRefresh ? 10000 : false }
+  );
 
   const getCameraName = (id: number) => camerasList?.find((c: any) => c.id === id)?.name ?? `CAM #${id}`;
   const getZoneName   = (id: number) => zonesList?.find((z: any) => z.id === id)?.name ?? `ZONE #${id}`;
 
-  const hasFilters = filterStatus !== "all" || filterZoneId !== "all" || filterThreat !== "all";
+  const hasFilters = filterStatus !== "all" || filterZoneId !== "all" || filterThreat !== "all" || selectedCameraId !== null;
 
   function resetFilters() {
     setFilterStatus("all");
     setFilterZoneId("all");
     setFilterThreat("all");
+    setSelectedCameraId(null);
+  }
+
+  function toggleCamera(camId: number) {
+    setSelectedCameraId(prev => prev === camId ? null : camId);
   }
 
   return (
@@ -45,7 +59,7 @@ export default function LiveAlertsFeed() {
         <div>
           <h1 className="text-2xl font-bold text-[#E2E8F0] font-mono tracking-tight">LIVE ALERTS</h1>
           <p className="text-[11px] font-mono text-[#64748B] mt-0.5">
-            {isLoading ? "loading…" : error ? "query error" : `${alerts?.length ?? 0} alerts`}
+            {isLoading ? "loading…" : error ? "query error" : `${alerts?.length ?? 0} alerts${selectedCameraId ? ` · cam filter active` : ""}`}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -64,6 +78,36 @@ export default function LiveAlertsFeed() {
             <RefreshCw className="w-3 h-3" /> REFRESH
           </Button>
         </div>
+      </div>
+
+      {/* Camera cards grid */}
+      <div>
+        <p className="text-[9px] font-mono uppercase tracking-widest text-[#64748B] mb-2">
+          Cameras — click to filter · hover for LIVE
+        </p>
+        {camsLoading ? (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="space-y-2">
+                <Skeleton className="aspect-video w-full rounded-xl bg-[#1E293B]" />
+                <Skeleton className="h-3 w-3/4 bg-[#1E293B]" />
+              </div>
+            ))}
+          </div>
+        ) : cameraSummary && cameraSummary.length > 0 ? (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+            {cameraSummary.map((cam: any) => (
+              <CameraCard
+                key={cam.id}
+                camera={cam}
+                zoneName={getZoneName(cam.zoneId)}
+                isSelected={selectedCameraId === cam.id}
+                onClick={() => toggleCamera(cam.id)}
+                onLive={() => setLiveCamera({ id: cam.id, name: cam.name })}
+              />
+            ))}
+          </div>
+        ) : null}
       </div>
 
       {/* Filter bar */}
@@ -120,10 +164,19 @@ export default function LiveAlertsFeed() {
           </Select>
         </div>
 
+        {selectedCameraId && (
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-[#06b6d4]/40 bg-[#06b6d4]/10 text-[10px] font-mono text-[#06b6d4]">
+            {getCameraName(selectedCameraId)}
+            <button onClick={() => setSelectedCameraId(null)} className="hover:text-white">
+              <X className="w-3 h-3" />
+            </button>
+          </div>
+        )}
+
         {hasFilters && (
           <Button variant="ghost" size="sm" onClick={resetFilters}
             className="h-8 px-3 text-[#64748B] hover:text-[#E2E8F0] text-[10px] font-mono gap-1.5">
-            <X className="w-3 h-3" /> Reset
+            <X className="w-3 h-3" /> Reset all
           </Button>
         )}
       </div>
@@ -136,7 +189,7 @@ export default function LiveAlertsFeed() {
         </div>
       )}
 
-      {/* Grid */}
+      {/* Alerts grid */}
       {isLoading ? (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
           {Array.from({ length: 10 }).map((_, i) => (
@@ -171,6 +224,15 @@ export default function LiveAlertsFeed() {
           <p className="text-[10px] font-mono mt-1 opacity-60">System is monitoring…</p>
         </div>
       ) : null}
+
+      {/* Live stream modal */}
+      {liveCamera && (
+        <LiveStreamModal
+          cameraId={liveCamera.id}
+          cameraName={liveCamera.name}
+          onClose={() => setLiveCamera(null)}
+        />
+      )}
     </div>
   );
 }
