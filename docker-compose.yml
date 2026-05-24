@@ -28,8 +28,8 @@ services:
       - DATABASE_URL=mysql://root:my-secret-pw@db:3306/blueeye
       - NODE_ENV=development
       - MEDIAMTX_INTERNAL_URL=http://mediamtx:8888
-      - STREAM_SERVER_URL=http://stream-server:33253
-      - PUBLIC_URL=http://localhost:33253
+      - STREAM_SERVER_URL=http://stream-server:4253
+      - PUBLIC_URL=http://localhost:3000/stream-hls
     depends_on:
       - db
     volumes:
@@ -122,10 +122,8 @@ services:
     build:
       context: ./stream-server
     container_name: blueeye-stream-server
-    ports:
-      - "33253:33253"
     environment:
-      - PORT=33253
+      - PORT=4253
       - DB_HOST=db
       - DB_USER=root
       - DB_PASSWORD=my-secret-pw

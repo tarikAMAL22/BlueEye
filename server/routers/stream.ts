@@ -1,8 +1,10 @@
 import { z } from 'zod';
 import { router, protectedProcedure } from '../_core/trpc';
 
-const STREAM_SERVER = process.env.STREAM_SERVER_URL || 'http://localhost:33253';
-const PUBLIC_URL    = process.env.PUBLIC_URL        || 'http://1.208.108.242:33253';
+const STREAM_SERVER = process.env.STREAM_SERVER_URL || 'http://localhost:4253';
+// PUBLIC_URL is the base URL the browser uses to fetch HLS segments.
+// It should point to the /stream-hls proxy on the main app.
+const PUBLIC_URL    = process.env.PUBLIC_URL        || 'http://localhost:8080/stream-hls';
 
 export const streamRouter = router({
   start: protectedProcedure

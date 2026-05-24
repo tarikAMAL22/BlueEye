@@ -7,7 +7,7 @@ const mysql = require('mysql2/promise');
 const app = express();
 app.use(express.json());
 
-const PORT       = parseInt(process.env.PORT || '33253');
+const PORT       = parseInt(process.env.PORT || '4253');
 const HLS_DIR    = process.env.HLS_DIR || '/tmp/hls';
 const IDLE_MS    = parseInt(process.env.IDLE_TIMEOUT_MS || '60000');
 const DB_HOST    = process.env.DB_HOST     || 'localhost';
