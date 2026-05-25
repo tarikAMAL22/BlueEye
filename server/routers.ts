@@ -109,6 +109,7 @@ export const appRouter = router({
           c.location,
           c.zoneId,
           c.status,
+          COUNT(CASE WHEN a.status = 'active' THEN 1 END) AS openAlerts,
           COUNT(CASE WHEN a.status IN ('active','escalated') THEN 1 END) AS activeAlerts,
           (SELECT faceSnapshotUrl FROM alerts
            WHERE cameraId = c.id AND faceSnapshotUrl IS NOT NULL
@@ -116,7 +117,7 @@ export const appRouter = router({
         FROM cameras c
         LEFT JOIN alerts a ON a.cameraId = c.id
         GROUP BY c.id, c.name, c.location, c.zoneId, c.status
-        ORDER BY activeAlerts DESC, c.id
+        ORDER BY openAlerts DESC, c.id
       `);
       return (rows[0] as unknown as any[]).map(r => ({
         id:           Number(r.id),
@@ -124,6 +125,7 @@ export const appRouter = router({
         location:     r.location as string | null,
         zoneId:       r.zoneId ? Number(r.zoneId) : null,
         status:       r.status as string,
+        openAlerts:   Number(r.openAlerts),
         activeAlerts: Number(r.activeAlerts),
         lastSnapshot: r.lastSnapshot as string | null,
       }));

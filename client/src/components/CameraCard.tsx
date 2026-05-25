@@ -6,6 +6,7 @@ interface CameraSummary {
   location: string | null;
   zoneId: number | null;
   status: string;
+  openAlerts?: number;
   activeAlerts: number;
   lastSnapshot: string | null;
 }
@@ -20,6 +21,7 @@ interface Props {
 
 export function CameraCard({ camera, zoneName, isSelected, onClick, onLive }: Props) {
   const isOnline = camera.status === "online";
+  const openAlerts = camera.openAlerts ?? camera.activeAlerts;
 
   return (
     <div
@@ -50,22 +52,22 @@ export function CameraCard({ camera, zoneName, isSelected, onClick, onLive }: Pr
           <span className="text-[8px] font-mono text-[#94A3B8] uppercase">{camera.status}</span>
         </div>
 
-        {/* Active alerts badge */}
-        {camera.activeAlerts > 0 && (
-          <div className="absolute top-1.5 right-1.5 flex items-center gap-0.5 bg-red-500/90 px-1.5 py-0.5 rounded text-[8px] font-mono font-bold text-white">
-            <AlertCircle className="w-2.5 h-2.5" />
-            {camera.activeAlerts}
-          </div>
-        )}
+        {/* Open alerts badge — always visible, red pulse if > 0, green if clear */}
+        <div className={`absolute top-1.5 right-1.5 flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[8px] font-mono font-bold text-white ${
+          openAlerts > 0 ? "bg-red-500/90 animate-pulse" : "bg-emerald-600/80"
+        }`}>
+          <AlertCircle className="w-2.5 h-2.5" />
+          {openAlerts}
+        </div>
 
-        {/* LIVE button */}
+        {/* LIVE button — always visible */}
         <button
           onClick={(e) => { e.stopPropagation(); onLive(); }}
           className="absolute bottom-1.5 right-1.5 flex items-center gap-1 px-2 py-0.5 rounded
-            bg-[#ec4899]/80 hover:bg-[#ec4899] text-white text-[8px] font-mono font-bold
-            opacity-0 group-hover:opacity-100 transition-opacity"
+            bg-[#ec4899]/80 hover:bg-[#ec4899] text-white text-[8px] font-mono font-bold"
         >
-          <Wifi className="w-2.5 h-2.5" /> LIVE
+          <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+          LIVE
         </button>
       </div>
 
