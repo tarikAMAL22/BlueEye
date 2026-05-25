@@ -370,3 +370,19 @@ export const motions = mysqlTable('motions', {
 
 export type Motion = typeof motions.$inferSelect;
 export type InsertMotion = typeof motions.$inferInsert;
+
+/**
+ * FaceCorrections table: audit log of "Not Him" identity corrections
+ */
+export const faceCorrections = mysqlTable('face_corrections', {
+  id:             int('id').autoincrement().primaryKey(),
+  alertId:        int('alertId').notNull(),
+  wrongPersonId:  int('wrongPersonId'),
+  correctPersonId: int('correctPersonId'),
+  correctedAt:    timestamp('correctedAt').notNull().default(sql`NOW()`),
+  correctedBy:    int('correctedBy'),
+}, (table) => ({
+  alertIdx: index('idx_corrections_alert').on(table.alertId),
+}));
+
+export type FaceCorrection = typeof faceCorrections.$inferSelect;

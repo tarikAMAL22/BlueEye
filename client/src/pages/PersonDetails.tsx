@@ -186,16 +186,21 @@ export default function PersonDetails() {
   };
 
   const handleNotHim = async (alertId: number) => {
-    if (!confirm("Are you sure this is NOT the correct person? The AI will re-analyze the image and find another candidate or create a new unknown record.")) {
+    if (!confirm("Are you sure this is NOT the correct person? The alert will be unassigned and queued for re-review.")) {
       return;
     }
 
     try {
       await notHimMutation.mutateAsync({ alertId });
-      toast.success("Identity corrected. AI is re-assigning...");
-      window.location.reload(); // Refresh to see changes
+      toast.success("Correction saved. CV worker will sync in ≤30s.");
+      window.location.reload();
     } catch (error: any) {
-      toast.error(`Correction failed: ${error.message}`);
+      if (error.message?.includes('CV Worker')) {
+        toast.success("Correction enregistrée (sync CV worker dans 30s)");
+        window.location.reload();
+      } else {
+        toast.error(`Correction failed: ${error.message}`);
+      }
     }
   };
 

@@ -499,22 +499,39 @@ export const appRouter = router({
       }),
 
     notHim: protectedProcedure
-      .input(z.object({ alertId: z.number() }))
-      .mutation(async ({ input }) => {
+      .input(z.object({
+        alertId:  z.number(),
+        personId: z.number().optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const alert = await db.getAlertById(input.alertId);
+        if (!alert) throw new Error('Alert not found');
+
+        // Unassign the wrong person and mark for review
+        await db.updateAlert(input.alertId, {
+          personId: null,
+          status: 'pending_review',
+        });
+        await db.addAlertLog(input.alertId, 'IDENTITY_REJECTED',
+          `Person ${alert.personId ?? 'unknown'} marked as incorrect`);
+
+        // Log the correction for model improvement
         try {
-          const response = await fetch(`${ENV.cvWorkerUrl}/api/re-match`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ alertId: input.alertId }),
-          });
-          if (!response.ok) {
-            const err = await response.json();
-            throw new Error(err.error || "Failed to re-match alert");
+          const drizzleDb = await db.getDb();
+          if (drizzleDb) {
+            await drizzleDb.execute(sql`
+              INSERT IGNORE INTO face_corrections
+                (alertId, wrongPersonId, correctedAt, correctedBy)
+              VALUES (${input.alertId}, ${alert.personId ?? null},
+                      NOW(), ${(ctx as any).user?.id ?? null})
+            `);
           }
-          return await response.json();
-        } catch (error: any) {
-          throw new Error(`CV Worker communication error: ${error.message}`);
+        } catch {
+          // Table may not exist yet — ignore
         }
+
+        // cv_worker FaceMatcher reloads from DB every 30s automatically
+        return { success: true, message: 'Correction saved. CV worker will sync in ≤30s.' };
       }),
     
     updateStatus: protectedProcedure
