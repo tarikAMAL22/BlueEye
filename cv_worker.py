@@ -146,6 +146,80 @@ class Track:
     last_db_update: float        = 0.0
     status:      str             = "BUFFERING"  # BUFFERING | ACTIVE | DONE
     detection_type: str          = "face"       # "face" | "body_only"
+    appearance_embedding: Optional[np.ndarray] = None  # clothing Re-ID vector 512D
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Appearance Re-ID (clothing-based deduplication for body-only tracks)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class AppearanceEmbedding:
+    """
+    Lightweight clothing-based Re-ID embedding.
+    Combines HSV color histograms + LBP texture features.
+    No GPU required, runs on CPU in ~2ms per body crop.
+    Output: normalized vector of dimension 512.
+    """
+
+    UPPER_WEIGHT = 2.0
+    LOWER_WEIGHT = 1.0
+
+    @staticmethod
+    def extract(body_crop: np.ndarray) -> Optional[np.ndarray]:
+        if body_crop is None or body_crop.size == 0:
+            return None
+        h, w = body_crop.shape[:2]
+        if h < 40 or w < 20:
+            return None
+        try:
+            y_start = int(h * 0.15)
+            y_mid   = int(h * 0.55)
+            y_end   = int(h * 0.95)
+            upper = body_crop[y_start:y_mid, :]
+            lower = body_crop[y_mid:y_end,   :]
+            if upper.size == 0 or lower.size == 0:
+                return None
+
+            def region_features(region: np.ndarray, weight: float) -> np.ndarray:
+                region_resized = cv2.resize(region, (64, 64))
+                hsv    = cv2.cvtColor(region_resized, cv2.COLOR_BGR2HSV)
+                h_hist = cv2.calcHist([hsv], [0], None, [18], [0, 180]).flatten()
+                s_hist = cv2.calcHist([hsv], [1], None, [8],  [0, 256]).flatten()
+                v_hist = cv2.calcHist([hsv], [2], None, [8],  [0, 256]).flatten()
+                color_feat = np.concatenate([h_hist, s_hist, v_hist])
+                color_feat = color_feat / (color_feat.sum() + 1e-7)
+                gray    = cv2.cvtColor(region_resized, cv2.COLOR_BGR2GRAY)
+                lbp_img = np.zeros_like(gray, dtype=np.uint8)
+                for dy, dx in [(-1,-1),(-1,0),(-1,1),(0,1),(1,1),(1,0),(1,-1),(0,-1)]:
+                    shifted = np.roll(np.roll(gray, dy, axis=0), dx, axis=1)
+                    lbp_img = (lbp_img << 1) | (gray >= shifted).astype(np.uint8)
+                lbp_hist = np.bincount(lbp_img.flatten(), minlength=256).astype(float)
+                lbp_hist = lbp_hist / (lbp_hist.sum() + 1e-7)
+                return np.concatenate([color_feat * weight, lbp_hist * weight])
+
+            upper_feat = region_features(upper, AppearanceEmbedding.UPPER_WEIGHT)
+            lower_feat = region_features(lower, AppearanceEmbedding.LOWER_WEIGHT)
+            full_feat  = np.concatenate([upper_feat, lower_feat])[:512]
+            if len(full_feat) < 512:
+                full_feat = np.pad(full_feat, (0, 512 - len(full_feat)))
+            norm = np.linalg.norm(full_feat)
+            if norm > 0:
+                full_feat = full_feat / norm
+            return full_feat.astype(np.float32)
+        except Exception as e:
+            logger.debug(f"AppearanceEmbedding.extract error: {e}")
+            return None
+
+    @staticmethod
+    def distance(emb_a: np.ndarray, emb_b: np.ndarray) -> float:
+        if emb_a is None or emb_b is None:
+            return 1.0
+        return max(0.0, 1.0 - float(np.dot(emb_a, emb_b)))
+
+    @staticmethod
+    def is_same_person(emb_a: np.ndarray, emb_b: np.ndarray,
+                       threshold: float = 0.18) -> bool:
+        return AppearanceEmbedding.distance(emb_a, emb_b) < threshold
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -450,6 +524,41 @@ class UnknownMatcher:
             self._names.append(name)
             self._encs.append(encoding)
 
+    def find_match_by_appearance(self, appearance_emb: np.ndarray,
+                                  conn, cursor) -> Tuple[Optional[int], Optional[str]]:
+        """Search recent body-only persons by appearance embedding stored in DB."""
+        if appearance_emb is None:
+            return None, None
+        try:
+            since = time.strftime('%Y-%m-%d %H:%M:%S',
+                                  time.localtime(time.time() - self.UNKNOWN_MATCH_WINDOW))
+            safe_execute(cursor, conn, """
+                SELECT DISTINCT p.id, p.name, p.appearanceEmbedding
+                FROM persons p
+                JOIN alerts a ON a.personId = p.id
+                WHERE p.detectionType = 'body_only'
+                  AND p.appearanceEmbedding IS NOT NULL
+                  AND a.cameraId = %s
+                  AND a.createdAt >= %s
+                LIMIT 200
+            """, (self.cam_id, since))
+            rows = cursor.fetchall()
+            best_id = None; best_name = None; best_dist = 1.0
+            for r in rows:
+                try:
+                    stored = np.array(json.loads(r['appearanceEmbedding']), dtype=np.float32)
+                    dist   = AppearanceEmbedding.distance(appearance_emb, stored)
+                    if dist < 0.18 and dist < best_dist:
+                        best_dist = dist
+                        best_id   = r['id']
+                        best_name = r['name']
+                except Exception:
+                    continue
+            return best_id, best_name
+        except Exception as e:
+            logger.debug(f"appearance DB search: {e}")
+            return None, None
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DB writers (INSERT first alert / UPDATE with better frame)
@@ -632,21 +741,50 @@ def _create_body_alert(track: Track, cam: dict, cursor, conn, unknown_matcher=No
     cam_id  = cam.get('id')
     zone_id = cam.get('zoneId', 1)
 
-    try:
-        uid  = str(uuid.uuid4())
-        name = f"body-only-{uid[:8]}"
-        safe_execute(cursor, conn,
-            "INSERT INTO persons (name, role, photoUrl, faceEncoding) "
-            "VALUES (%s,'UNKNOWN',%s,NULL)",
-            (name, face_url)
+    # Extract appearance embedding from the best body crop
+    if track.appearance_embedding is None and track.face_image is not None:
+        track.appearance_embedding = AppearanceEmbedding.extract(track.face_image)
+
+    # Check DB for existing body-only person with same appearance (Re-ID)
+    if track.appearance_embedding is not None and unknown_matcher is not None:
+        existing_id, existing_name = unknown_matcher.find_match_by_appearance(
+            track.appearance_embedding, conn, cursor
         )
-        track.person_id = cursor.lastrowid
-        track.role      = 'UNKNOWN'
-        conn.commit()
-    except Exception as e:
-        logger.error(f"Body person insert failed: {e}")
-        conn.rollback()
-        return
+        if existing_id:
+            track.person_id = existing_id
+            track.role      = 'UNKNOWN'
+            logger.info(
+                f"Body Re-ID: track {track.track_id} matched existing "
+                f"person '{existing_name}' (pid={existing_id}) via appearance"
+            )
+
+    if track.person_id:
+        # Re-ID matched — skip person INSERT, go straight to alert
+        pass
+    else:
+        try:
+            uid  = str(uuid.uuid4())
+            name = f"body-only-{uid[:8]}"
+            safe_execute(cursor, conn,
+                "INSERT INTO persons (name, role, photoUrl, faceEncoding, detectionType) "
+                "VALUES (%s,'UNKNOWN',%s,NULL,'body_only')",
+                (name, face_url)
+            )
+            track.person_id = cursor.lastrowid
+            track.role      = 'UNKNOWN'
+            conn.commit()
+            # Save appearance embedding for future Re-ID matching
+            if track.appearance_embedding is not None:
+                emb_json = json.dumps(track.appearance_embedding.tolist())
+                safe_execute(cursor, conn,
+                    "UPDATE persons SET appearanceEmbedding = %s WHERE id = %s",
+                    (emb_json, track.person_id)
+                )
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Body person insert failed: {e}")
+            conn.rollback()
+            return
 
     try:
         safe_execute(cursor, conn, """
@@ -710,14 +848,11 @@ def match_detection_to_tracks(
     bbox:     Tuple,
     encoding: np.ndarray,
     enc_hash: tuple,
-    cam_id:   int
+    cam_id:   int,
+    appearance_emb: Optional[np.ndarray] = None,
 ) -> Optional[str]:
     """
-    Return track_id of best matching active track, or None.
-    Three-pass strategy:
-      1. Exact enc_hash match (same face, moved far)
-      2. IoU + encoding similarity score >= TRACKER_SCORE_THR
-      3. Encoding-only match (person turned, different angle)
+    4-pass matching: hash → IoU+encoding → encoding-only → appearance Re-ID.
     """
     # Pass 1: exact hash
     for tid, t in tracks.items():
@@ -750,6 +885,33 @@ def match_detection_to_tracks(
         d = float(face_recognition.face_distance([t.face_encoding], encoding)[0])
         if d < ENCODING_DISTANCE_THR:
             return tid
+
+    # Pass 4: appearance Re-ID (for body_only tracks without face encoding)
+    if appearance_emb is not None:
+        best_app_tid   = None
+        best_app_score = 0.0
+        for tid, t in tracks.items():
+            if t.cam_id != cam_id or t.status == 'DONE':
+                continue
+            if t.appearance_embedding is None:
+                continue
+            app_dist = AppearanceEmbedding.distance(appearance_emb, t.appearance_embedding)
+            app_sim  = max(0.0, 1.0 - app_dist / 0.18)
+            spatial_ok = True
+            if t.last_box is not None:
+                t_cx = (t.last_box[3] + t.last_box[1]) / 2
+                t_cy = (t.last_box[0] + t.last_box[2]) / 2
+                b_cx = (bbox[3] + bbox[1]) / 2
+                b_cy = (bbox[0] + bbox[2]) / 2
+                body_h = bbox[2] - bbox[0]
+                dist_norm = ((b_cx-t_cx)**2 + (b_cy-t_cy)**2)**0.5 / max(body_h, 1)
+                spatial_ok = dist_norm < 3.0
+            if app_sim > 0.5 and spatial_ok and app_sim > best_app_score:
+                best_app_score = app_sim
+                best_app_tid   = tid
+        if best_app_tid:
+            logger.debug(f"Appearance Re-ID match: score={best_app_score:.3f} → track {best_app_tid}")
+            return best_app_tid
 
     return None
 
@@ -802,6 +964,19 @@ def _refresh_track(
     crop = frame[ct:cb, cl:cr]
     if crop.size == 0:
         return
+
+    # Appearance embedding (clothing Re-ID) — update on first good crop or better frame
+    quality_preview = frame_quality(crop, bbox, frame.shape)
+    if track.appearance_embedding is None or quality_preview > track.best_quality * 0.8:
+        new_emb = AppearanceEmbedding.extract(crop)
+        if new_emb is not None:
+            if track.appearance_embedding is None:
+                track.appearance_embedding = new_emb
+            else:
+                track.appearance_embedding = 0.7 * track.appearance_embedding + 0.3 * new_emb
+                norm = np.linalg.norm(track.appearance_embedding)
+                if norm > 0:
+                    track.appearance_embedding /= norm
 
     quality = frame_quality(crop, bbox, frame.shape)
     if quality > track.best_quality:
@@ -1091,10 +1266,20 @@ def process_camera(cam: dict, matcher: FaceMatcher):
                                 continue
 
                         # Find existing track (face OR body) covering this body bbox.
-                        # Point-in-box for face tracks; IoU for body tracks.
+                        # Point-in-box for face tracks; IoU for body tracks; appearance Re-ID fallback.
                         found_body_track = None
                         b_t2, b_r2, b_b2, b_l2 = body_bbox
                         bh2 = b_b2 - b_t2
+
+                        # Extract appearance embedding early for Re-ID pass
+                        h_f2_pre, w_f2_pre = frame.shape[:2]
+                        pad_pre = int((b_b2 - b_t2) * 0.05)
+                        _bt = max(0,        b_t2 - pad_pre)
+                        _bb = min(h_f2_pre, b_b2 + pad_pre)
+                        _bl = max(0,        b_l2 - pad_pre)
+                        _br = min(w_f2_pre, b_r2 + pad_pre)
+                        _pre_crop = frame[_bt:_bb, _bl:_br]
+                        yolo_appearance = AppearanceEmbedding.extract(_pre_crop) if _pre_crop.size > 0 else None
 
                         for tid, t in list(tracks.items()):
                             if t.cam_id != cam_id or t.status == 'DONE':
@@ -1117,8 +1302,14 @@ def process_camera(cam: dict, matcher: FaceMatcher):
                                     found_body_track = tid
                                     break
                             else:
-                                # Body track: standard IoU is fine (same bbox type)
+                                # Body track: IoU first, then appearance Re-ID as fallback
                                 if compute_iou(body_bbox, t.last_box) > 0.15:
+                                    found_body_track = tid
+                                    break
+                                if (yolo_appearance is not None
+                                        and t.appearance_embedding is not None
+                                        and AppearanceEmbedding.is_same_person(
+                                            yolo_appearance, t.appearance_embedding)):
                                     found_body_track = tid
                                     break
 
@@ -1172,6 +1363,17 @@ def process_camera(cam: dict, matcher: FaceMatcher):
                                 body_track.face_image   = body_img
                                 body_track.full_frame   = frame.copy()
                                 body_track.crop_coords  = (bt, bb, bl, br)
+                            # Update appearance embedding from body crop
+                            if yolo_appearance is not None:
+                                if body_track.appearance_embedding is None:
+                                    body_track.appearance_embedding = yolo_appearance
+                                else:
+                                    body_track.appearance_embedding = (
+                                        0.7 * body_track.appearance_embedding + 0.3 * yolo_appearance
+                                    )
+                                    norm = np.linalg.norm(body_track.appearance_embedding)
+                                    if norm > 0:
+                                        body_track.appearance_embedding /= norm
 
                         if (body_track.status == 'BUFFERING'
                                 and body_track.frame_count >= BUFFER_FRAMES
