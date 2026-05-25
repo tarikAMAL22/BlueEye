@@ -13,6 +13,7 @@ export const motionsRouter = router({
       cameraId: z.number().optional(),
       zoneId:   z.number().optional(),
       since:    z.string().datetime().optional(),
+      tab:      z.enum(['all', 'face', 'body']).default('all'),
     }))
     .query(async ({ input }) => {
       const db = await getDb()
@@ -22,6 +23,8 @@ export const motionsRouter = router({
       if (input.cameraId) conditions.push(eq(motions.cameraId, input.cameraId))
       if (input.zoneId)   conditions.push(eq(motions.zoneId,   input.zoneId))
       if (input.since)    conditions.push(gte(motions.detectedAt, new Date(input.since)))
+      if (input.tab === 'face') conditions.push(sql`${motions.personsDetected} > 0`)
+      if (input.tab === 'body') conditions.push(sql`${motions.personsDetected} > 0`)
 
       const rows = await db
         .select({
@@ -31,6 +34,8 @@ export const motionsRouter = router({
           zoneId:           motions.zoneId,
           zoneName:         zones.name,
           frameSnapshotUrl: motions.frameSnapshotUrl,
+          frame2Url:        motions.frame2Url,
+          frame3Url:        motions.frame3Url,
           motionArea:       motions.motionArea,
           personsDetected:  motions.personsDetected,
           detectedAt:       motions.detectedAt,
@@ -59,21 +64,36 @@ export const motionsRouter = router({
       const db = await getDb()
       if (!db) throw new Error('DB unavailable')
 
-      const since = new Date(Date.now() - input.hours * 3600 * 1000)
-      const rows = await db.execute(sql`
+      const since = new Date(Date.now() - input.hours * 3600_000)
+
+      const [result] = await db.execute(sql`
         SELECT
-          c.name AS cameraName,
-          DATE_FORMAT(m.detectedAt, '%Y-%m-%d %H:00:00') AS hour,
-          COUNT(*) AS motionCount,
-          SUM(m.personsDetected) AS personsTotal,
-          AVG(m.motionArea) AS avgMotionArea
-        FROM motions m
-        LEFT JOIN cameras c ON m.cameraId = c.id
-        WHERE m.detectedAt >= ${since}
-        GROUP BY c.name, DATE_FORMAT(m.detectedAt, '%Y-%m-%d %H:00:00')
-        ORDER BY hour DESC, motionCount DESC
-      `)
-      return rows
+          COUNT(*)                                               AS total,
+          SUM(CASE WHEN personsDetected > 1  THEN 1 ELSE 0 END) AS multiPerson,
+          SUM(CASE WHEN personsDetected > 0  THEN 1 ELSE 0 END) AS withPerson,
+          COUNT(DISTINCT cameraId)                               AS activeCameras
+        FROM motions
+        WHERE detectedAt >= ${since}
+      `) as any[]
+
+      const [alertStats] = await db.execute(sql`
+        SELECT
+          SUM(CASE WHEN detectionType = 'face'      THEN 1 ELSE 0 END) AS withFace,
+          SUM(CASE WHEN detectionType = 'body_only' THEN 1 ELSE 0 END) AS withBody,
+          COUNT(CASE WHEN status = 'active'          THEN 1 END)        AS withAlert
+        FROM alerts
+        WHERE createdAt >= ${since}
+      `) as any[]
+
+      return {
+        total:         Number(result?.total         ?? 0),
+        multiPerson:   Number(result?.multiPerson   ?? 0),
+        withPerson:    Number(result?.withPerson     ?? 0),
+        activeCameras: Number(result?.activeCameras ?? 0),
+        withFace:      Number(alertStats?.withFace  ?? 0),
+        withBody:      Number(alertStats?.withBody  ?? 0),
+        withAlert:     Number(alertStats?.withAlert ?? 0),
+      }
     }),
 
   cleanup: protectedProcedure

@@ -357,6 +357,8 @@ export const motions = mysqlTable('motions', {
   cameraId:         int('cameraId').notNull(),
   zoneId:           int('zoneId').notNull().default(1),
   frameSnapshotUrl: varchar('frameSnapshotUrl', { length: 500 }),
+  frame2Url:        varchar('frame2Url', { length: 500 }),
+  frame3Url:        varchar('frame3Url', { length: 500 }),
   motionArea:       int('motionArea').notNull().default(0),
   personsDetected:  int('personsDetected').notNull().default(0),
   detectedAt:       timestamp('detectedAt').notNull().default(sql`NOW()`),

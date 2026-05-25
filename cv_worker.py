@@ -679,22 +679,26 @@ def _create_body_alert(track: Track, cam: dict, cursor, conn, unknown_matcher=No
         conn.rollback()
 
 
-def log_motion_event(cam_id: int, zone_id: int, frame: np.ndarray,
+def log_motion_event(cam_id: int, zone_id: int,
+                     frame1: np.ndarray, frame2: np.ndarray, frame3: np.ndarray,
                      motion_area: int, n_persons: int, cursor, conn):
-    """Record every motion event with a snapshot (if motions table exists)."""
+    """Record every motion event with 3 frame snapshots."""
     try:
-        uid        = str(uuid.uuid4())
-        frame_path = os.path.join(UPLOAD_DIR, f"motion_{uid}.jpg")
-        cv2.imwrite(frame_path, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-        frame_url  = f"/uploads/motion_{uid}.jpg"
+        uid  = str(uuid.uuid4())
+        urls = []
+        for i, fr in enumerate([frame1, frame2, frame3], 1):
+            path = os.path.join(UPLOAD_DIR, f"motion_{uid}_{i}.jpg")
+            cv2.imwrite(path, fr, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+            urls.append(f"/uploads/motion_{uid}_{i}.jpg")
         safe_execute(cursor, conn, """
             INSERT IGNORE INTO motions
-              (cameraId, zoneId, frameSnapshotUrl, motionArea, personsDetected, detectedAt)
-            VALUES (%s, %s, %s, %s, %s, NOW())
-        """, (cam_id, zone_id, frame_url, motion_area, n_persons))
+              (cameraId, zoneId, frameSnapshotUrl, frame2Url, frame3Url,
+               motionArea, personsDetected, detectedAt)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+        """, (cam_id, zone_id, urls[0], urls[1], urls[2], motion_area, n_persons))
         conn.commit()
-    except Exception:
-        pass  # motions table may not exist yet
+    except Exception as e:
+        logger.debug(f"motion log error: {e}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -860,6 +864,7 @@ def process_camera(cam: dict, matcher: FaceMatcher):
     cap                  = None
     frame_count          = 0
     last_motion_log_time = 0.0   # throttle: one motion snapshot every 5s
+    frame_buffer: list   = []    # circular buffer of last 3 frames for 3-snapshot logging
 
     try:
         while not stop_signals.get(cam_id):
@@ -886,6 +891,10 @@ def process_camera(cam: dict, matcher: FaceMatcher):
                 time.sleep(2)
                 continue
 
+            frame_buffer.append(frame.copy())
+            if len(frame_buffer) > 3:
+                frame_buffer.pop(0)
+
             frame_count += 1
             now = time.time()
 
@@ -905,7 +914,10 @@ def process_camera(cam: dict, matcher: FaceMatcher):
             if motion_detected:
                 # Log every motion event (with or without face) — throttled 5s
                 if now - last_motion_log_time >= 5.0:
-                    log_motion_event(cam_id, zone_id, frame, motion_pix, 0, cursor, conn)
+                    buf = frame_buffer if len(frame_buffer) >= 3 else [frame] * 3
+                    log_motion_event(cam_id, zone_id,
+                                     buf[-3], buf[-2], buf[-1],
+                                     motion_pix, 0, cursor, conn)
                     last_motion_log_time = now
 
                 # ════════════════════════════════════════════════════════════

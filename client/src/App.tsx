@@ -16,7 +16,6 @@ import PersonRegistry from "./pages/PersonRegistry";
 import PersonDetails from "./pages/PersonDetails";
 import SystemSettings from "./pages/SystemSettings";
 import BlacklistManagement from "./pages/BlacklistManagement";
-import MotionDetections from "./pages/MotionDetections";
 import AlertDetails from "./pages/AlertDetails";
 import MovementDetails from "./pages/MovementDetails";
 import ManageUnknownReview from "./pages/ManageUnknownReview";
@@ -62,7 +61,6 @@ function Router() {
         <Route path={"/"} component={Dashboard} />
         <Route path={"/alerts"} component={LiveAlertsFeed} />
         <Route path={"/alerts/:id"} component={AlertDetails} />
-        <Route path={"/movements"} component={MotionDetections} />
         <Route path={"/movements/:id"} component={MovementDetails} />
         <Route path={"/events"} component={EventLog} />
         
