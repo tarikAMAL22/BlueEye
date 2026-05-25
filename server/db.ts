@@ -178,9 +178,12 @@ export async function getPersons(filters: {
   const db = await getDb();
   if (!db) return [];
 
-  // Always exclude legacy body-only person records — body-only detections are
-  // stored as alerts with personId=NULL, not as persons rows.
-  const conditions: any[] = [ne(persons.detectionType, 'body_only')];
+  // Always exclude body-only person records (detectionType OR legacy name pattern).
+  // Body-only detections are stored as alerts with personId=NULL, not as persons rows.
+  const conditions: any[] = [
+    ne(persons.detectionType, 'body_only'),
+    sql`${persons.name} NOT LIKE 'body-only-%'`,
+  ];
   if (filters.detectionType && filters.detectionType !== 'all') {
     conditions.push(eq(persons.detectionType, filters.detectionType));
   }
