@@ -178,7 +178,9 @@ export async function getPersons(filters: {
   const db = await getDb();
   if (!db) return [];
 
-  const conditions = [];
+  // Always exclude legacy body-only person records — body-only detections are
+  // stored as alerts with personId=NULL, not as persons rows.
+  const conditions: any[] = [ne(persons.detectionType, 'body_only')];
   if (filters.detectionType && filters.detectionType !== 'all') {
     conditions.push(eq(persons.detectionType, filters.detectionType));
   }
@@ -189,11 +191,9 @@ export async function getPersons(filters: {
     conditions.push(like(persons.name, `%${filters.search}%`));
   }
 
-  const q = db.select().from(persons);
-  const ordered = conditions.length
-    ? (q as any).where(and(...conditions)).orderBy(desc(persons.createdAt))
-    : q.orderBy(desc(persons.createdAt));
-  return ordered;
+  return (db.select().from(persons) as any)
+    .where(and(...conditions))
+    .orderBy(desc(persons.createdAt));
 }
 
 export async function getPersonById(id: number) {
