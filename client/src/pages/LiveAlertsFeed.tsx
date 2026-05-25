@@ -83,7 +83,7 @@ export default function LiveAlertsFeed() {
       {/* Camera cards grid */}
       <div>
         <p className="text-[9px] font-mono uppercase tracking-widest text-[#64748B] mb-2">
-          Cameras — click to filter · hover for LIVE
+          Cameras — click to filter · LIVE button always visible
         </p>
         {camsLoading ? (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">

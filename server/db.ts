@@ -706,20 +706,15 @@ export async function getDashboardSystemStatus() {
   const db = await getDb();
   if (!db) return { cvWorkerAlive: false, camerasOnline: 0, camerasTotal: 0, pendingAlerts: 0 };
 
-  let cvWorkerAlive = false;
-  try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 2000);
-    const cvWorkerUrl = process.env.CV_WORKER_URL ?? "http://localhost:5000";
-    const res = await fetch(`${cvWorkerUrl}/health`, { signal: ctrl.signal });
-    clearTimeout(timer);
-    cvWorkerAlive = res.ok;
-  } catch { /* offline */ }
-
-  const [cameraList, pendingList] = await Promise.all([
+  // cv_worker has no HTTP server — use DB heartbeat:
+  // consider it alive if it created any alert in the last 10 minutes.
+  const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000);
+  const [cameraList, pendingList, recentAlertList] = await Promise.all([
     db.select({ status: cameras.status }).from(cameras),
     db.select({ id: alerts.id }).from(alerts).where(eq(alerts.status, 'active')),
+    db.select({ id: alerts.id }).from(alerts).where(gte(alerts.createdAt, tenMinAgo)).limit(1),
   ]);
+  const cvWorkerAlive = recentAlertList.length > 0;
 
   return {
     cvWorkerAlive,

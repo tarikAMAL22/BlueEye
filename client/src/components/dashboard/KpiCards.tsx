@@ -23,7 +23,7 @@ export function KpiCards() {
       actionLabel: isAdmin ? "MANAGE →" : "VIEW →",
     },
     {
-      label: "DÉTECTIONS TODAY",
+      label: "DETECTIONS TODAY",
       value: breakdown?.totalToday ?? "–",
       icon: Eye,
       color: "#00F5FF",
@@ -32,17 +32,17 @@ export function KpiCards() {
       actionLabel: isAdmin ? "MANAGE →" : "VIEW →",
     },
     {
-      label: "INCONNUS",
+      label: "UNKNOWNS TODAY",
       value: breakdown?.unknownToday ?? "–",
       icon: UserX,
       color: "#F97316",
       warn: (breakdown?.unknownPercent ?? 0) > 20,
-      sub: breakdown ? `${breakdown.unknownPercent}% du total` : undefined,
+      sub: breakdown ? `${breakdown.unknownPercent}% of total` : undefined,
       action: () => navigate("/registry"),
       actionLabel: isAdmin ? "MANAGE →" : "VIEW →",
     },
     {
-      label: "CAMÉRAS",
+      label: "CAMERAS",
       value:
         systemStatus
           ? `${systemStatus.camerasOnline}/${systemStatus.camerasTotal}`

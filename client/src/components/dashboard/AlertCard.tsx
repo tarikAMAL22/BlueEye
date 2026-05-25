@@ -169,7 +169,7 @@ export function AlertCard({ alert, cameraName, zoneName }: Props) {
       <div className="px-2.5 pt-2 pb-1.5 space-y-1.5">
         {/* Person name */}
         <div className="text-[12px] font-mono font-bold text-[#E2E8F0] truncate">
-          {alert.person?.name ?? "INCONNU"}
+          {alert.person?.name ?? "UNKNOWN"}
         </div>
 
         {/* Camera + Zone — prominent */}
