@@ -35,7 +35,8 @@ export default function ManageUnknownReview() {
     if (!persons) return [];
     return persons.filter((p: any) =>
       !p.isBlacklisted &&
-      (p.role.toLowerCase() === "unknown" || p.name.toLowerCase().startsWith("unknown-"))
+      (p.role.toLowerCase() === "unknown" || p.name.toLowerCase().startsWith("unknown-")) &&
+      p.detectionType !== "body_only"
     );
   }, [persons]);
 
