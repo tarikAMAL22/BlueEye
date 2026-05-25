@@ -1,0 +1,17 @@
+logLevel: warn
+rtspAddress: :8554
+rtmpAddress: :1935
+hlsAddress: :8888
+webrtcAddress: :8889
+
+readBufferCount: 512
+
+paths:
+  cam1: {}
+  cam2: {}
+  cam3: {}
+  cam4: {}
+  cam5: {}
+  cam6: {}
+  cam7: {}
+  cam8: {}

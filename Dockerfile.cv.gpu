@@ -22,6 +22,9 @@ RUN DLIB_USE_CUDA=1 pip3 install --no-cache-dir dlib
 RUN python3 -c "import dlib; assert dlib.DLIB_USE_CUDA, 'CUDA NOT in dlib!'; print('dlib CUDA OK:', dlib.DLIB_USE_CUDA)"
 
 RUN pip3 install --no-cache-dir \
+    torch torchvision --index-url https://download.pytorch.org/whl/cu118
+
+RUN pip3 install --no-cache-dir \
     face_recognition \
     opencv-python-headless \
     mysql-connector-python \

@@ -22,44 +22,46 @@ services:
       context: .
       dockerfile: Dockerfile.app
       args:
-        # Clients (browsers) need the public IP to reach HLS/WebRTC streams
-        VITE_MEDIAMTX_URL: http://${PUBLIC_IP}:8888
+        VITE_MEDIAMTX_URL: http://${PUBLIC_IP}:${MEDIAMTX_HLS_PORT}
         VITE_APP_ID: blueeye
+    container_name: blueeye-app
     ports:
-      - "3000:3000"
+      - "8080:3000"
     environment:
       - NODE_ENV=production
       - DATABASE_URL=mysql://root:${DB_PASSWORD}@db:3306/blueeye
       - JWT_SECRET=${JWT_SECRET}
-      - CV_WORKER_URL=http://cv-worker:5000
+      - STREAM_SERVER_URL=http://stream-server:4253
+      - PUBLIC_URL=http://${PUBLIC_IP}:${BLUEEYE_PORT}/stream-hls
       - MEDIAMTX_INTERNAL_URL=http://mediamtx:8888
-      - OAUTH_SERVER_URL=http://${PUBLIC_IP}:3000
-      - OWNER_OPEN_ID=${OWNER_OPEN_ID}
     depends_on:
       - db
     restart: unless-stopped
+    volumes:
+      - ./client/public/uploads:/app/client/public/uploads
     networks:
       - blueeye-network
 
   cv-worker:
     build:
       context: .
-      dockerfile: Dockerfile.v2
+      dockerfile: Dockerfile.cv.gpu
     container_name: blueeye-cv-worker
+    runtime: nvidia
     environment:
       - DB_HOST=db
       - DB_USER=root
       - DB_PASSWORD=${DB_PASSWORD}
       - DB_NAME=blueeye
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       - REID_TIME_WINDOW_SECONDS=120
       - BLUR_THRESHOLD=80
       - FACE_MATCH_HIGH=0.35
       - FACE_MATCH_MED=0.45
       - USE_CNN_DETECTOR=true
       - USE_YOLO_DETECTOR=true
-      - CV_WORKER_IN_DOCKER=true
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - CUDA_VISIBLE_DEVICES=0
     depends_on:
       - db
       - redis
@@ -73,8 +75,7 @@ services:
               count: 1
               capabilities: [gpu]
     volumes:
-      - ./uploads:/app/uploads
-      - ./yolov8n.pt:/app/yolov8n.pt
+      - ./client/public/uploads:/app/client/public/uploads
     networks:
       - blueeye-network
 
@@ -84,7 +85,7 @@ services:
     ports:
       - "8554:8554"
       - "1935:1935"
-      - "8888:8888"
+      - "1111:8888"
       - "8889:8889"
     volumes:
       - ./mediamtx.yml:/mediamtx.yml
@@ -92,18 +93,25 @@ services:
     networks:
       - blueeye-network
 
-  streamer:
+  stream-server:
     build:
-      context: ./streamer
-    container_name: blueeye-streamer
+      context: ./stream-server
+    container_name: blueeye-stream-server
+    environment:
+      - PORT=4253
+      - DB_HOST=db
+      - DB_USER=root
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=blueeye
+      - HLS_DIR=/tmp/hls
+      - IDLE_TIMEOUT_MS=60000
     volumes:
-      - ${VIDEO_PATH:-/videos}:/videos:ro
-      - ./streamer_config:/streamer_config
+      - /tmp/hls:/tmp/hls
+    depends_on:
+      - db
+    restart: unless-stopped
     networks:
       - blueeye-network
-    depends_on:
-      - mediamtx
-    restart: unless-stopped
 
 networks:
   blueeye-network:
