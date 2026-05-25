@@ -6,6 +6,7 @@ import { z } from "zod";
 import * as db from "./db";
 import { motionsRouter } from "./routers/motions";
 import { streamRouter } from "./routers/stream";
+import { bodyMatchesRouter } from "./routers/bodyMatches";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -806,6 +807,7 @@ export const appRouter = router({
 
   motions: motionsRouter,
   stream: streamRouter,
+  bodyMatches: bodyMatchesRouter,
 
   movements: router({
     list: protectedProcedure

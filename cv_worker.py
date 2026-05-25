@@ -671,33 +671,40 @@ def create_alert(track: Track, cam: dict, cursor, conn, unknown_matcher=None):
 
 
 def update_alert(track: Track, cam: dict, cursor, conn):
-    """UPDATE existing alert with better frame + higher confidence.
-    Fix 3: also updates persons.photoUrl so the profile stays in sync.
-    """
+    """UPDATE existing alert with better frame + higher confidence."""
     if not track.alert_id:
         return
     now = time.time()
     if now - track.last_db_update < ALERT_UPDATE_INTERVAL:
         return
 
-    # Fix 2: validate crop before writing
     if not _validate_face_image(track.face_image):
         return
 
     face_url, frame_url = save_images(track.face_image, track.full_frame)
-    threat = 'high' if track.role == 'UNKNOWN' else 'medium'
+    threat = 'high' if (track.role == 'UNKNOWN' or track.detection_type == 'body_only') else 'medium'
+
+    # Serialize updated appearance embedding for body_only tracks
+    app_emb_json = None
+    if track.detection_type == 'body_only' and track.appearance_embedding is not None:
+        try:
+            app_emb_json = json.dumps(track.appearance_embedding.tolist())
+        except Exception:
+            pass
 
     try:
         safe_execute(cursor, conn, """
             UPDATE alerts
                SET faceSnapshotUrl=%s, bestFrameSnapshotUrl=%s,
-                   confidence=%s, threatLevel=%s
+                   confidence=%s, threatLevel=%s,
+                   appearanceEmbedding=COALESCE(%s, appearanceEmbedding)
              WHERE id=%s
-        """, (face_url, frame_url, track.confidence, threat, track.alert_id))
+        """, (face_url, frame_url, track.confidence, threat,
+               app_emb_json, track.alert_id))
         conn.commit()
 
-        # Fix 3: keep persons.photoUrl in sync with the best face crop
-        if track.person_id and track.role == 'UNKNOWN':
+        # Only sync photoUrl for FACE tracks (body_only has no person record)
+        if track.person_id and track.detection_type == 'face' and track.role == 'UNKNOWN':
             safe_execute(cursor, conn,
                 "UPDATE persons SET photoUrl=%s WHERE id=%s AND role='UNKNOWN'",
                 (face_url, track.person_id)
@@ -726,13 +733,12 @@ def _validate_body_image(body_img: np.ndarray) -> bool:
 
 def _create_body_alert(track: Track, cam: dict, cursor, conn, unknown_matcher=None):
     """
-    Called ONLY for tracks where face_recognition found NO face.
-    If a face track exists for the same person, Fix 2 prevents reaching here.
+    Create alert for body-only detection.
+    NO person record created — alert has personId=NULL.
+    Stores appearance embedding in alert for operator-assisted matching.
     """
     if track.detection_type != 'body_only':
-        logger.warning(f"_create_body_alert called on non-body track {track.track_id} — skip")
         return
-
     if not _validate_body_image(track.face_image):
         logger.warning(f"Body track {track.track_id}: invalid body image — skipping")
         return
@@ -741,58 +747,24 @@ def _create_body_alert(track: Track, cam: dict, cursor, conn, unknown_matcher=No
     cam_id  = cam.get('id')
     zone_id = cam.get('zoneId', 1)
 
-    # Extract appearance embedding from the best body crop
+    # Ensure appearance embedding is extracted
     if track.appearance_embedding is None and track.face_image is not None:
         track.appearance_embedding = AppearanceEmbedding.extract(track.face_image)
 
-    # Check DB for existing body-only person with same appearance (Re-ID)
-    if track.appearance_embedding is not None and unknown_matcher is not None:
-        existing_id, existing_name = unknown_matcher.find_match_by_appearance(
-            track.appearance_embedding, conn, cursor
-        )
-        if existing_id:
-            track.person_id = existing_id
-            track.role      = 'UNKNOWN'
-            logger.info(
-                f"Body Re-ID: track {track.track_id} matched existing "
-                f"person '{existing_name}' (pid={existing_id}) via appearance"
-            )
-
-    if track.person_id:
-        # Re-ID matched — skip person INSERT, go straight to alert
-        pass
-    else:
+    app_emb_json = None
+    if track.appearance_embedding is not None:
         try:
-            uid  = str(uuid.uuid4())
-            name = f"body-only-{uid[:8]}"
-            safe_execute(cursor, conn,
-                "INSERT INTO persons (name, role, photoUrl, faceEncoding, detectionType) "
-                "VALUES (%s,'UNKNOWN',%s,NULL,'body_only')",
-                (name, face_url)
-            )
-            track.person_id = cursor.lastrowid
-            track.role      = 'UNKNOWN'
-            conn.commit()
-            # Save appearance embedding for future Re-ID matching
-            if track.appearance_embedding is not None:
-                emb_json = json.dumps(track.appearance_embedding.tolist())
-                safe_execute(cursor, conn,
-                    "UPDATE persons SET appearanceEmbedding = %s WHERE id = %s",
-                    (emb_json, track.person_id)
-                )
-                conn.commit()
-        except Exception as e:
-            logger.error(f"Body person insert failed: {e}")
-            conn.rollback()
-            return
+            app_emb_json = json.dumps(track.appearance_embedding.tolist())
+        except Exception:
+            pass
 
     try:
         safe_execute(cursor, conn, """
             INSERT INTO alerts
               (personId, cameraId, zoneId, faceSnapshotUrl, bestFrameSnapshotUrl,
-               confidence, status, threatLevel, detectionType)
-            VALUES (%s,%s,%s,%s,%s,%s,'active','high','NO_FACE')
-        """, (track.person_id, cam_id, zone_id, face_url, frame_url, track.confidence))
+               confidence, status, threatLevel, detectionType, appearanceEmbedding)
+            VALUES (NULL, %s, %s, %s, %s, %s, 'active', 'high', 'NO_FACE', %s)
+        """, (cam_id, zone_id, face_url, frame_url, track.confidence, app_emb_json))
         track.alert_id       = cursor.lastrowid
         track.last_db_update = time.time()
         conn.commit()
@@ -801,14 +773,13 @@ def _create_body_alert(track: Track, cam: dict, cursor, conn, unknown_matcher=No
             INSERT INTO events
               (personId, cameraId, zoneId, faceSnapshotUrl, bestFrameSnapshotUrl,
                confidence, eventType)
-            VALUES (%s,%s,%s,%s,%s,%s,'body_detected')
-        """, (track.person_id, cam_id, zone_id, face_url, frame_url, track.confidence))
+            VALUES (NULL, %s, %s, %s, %s, %s, 'body_detected')
+        """, (cam_id, zone_id, face_url, frame_url, track.confidence))
         conn.commit()
 
         logger.info(
-            f"BODY ALERT #{track.alert_id} CREATED — "
-            f"pid={track.person_id} cam={cam.get('name')} "
-            f"conf={track.confidence:.1f}%"
+            f"BODY ALERT #{track.alert_id} — "
+            f"cam={cam.get('name')} conf={track.confidence:.1f}% (no person record)"
         )
         track.status = 'ACTIVE'
 

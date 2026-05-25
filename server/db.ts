@@ -246,6 +246,7 @@ const SAFE_ALERT_COLS = {
   faceQuality:          alerts.faceQuality,
   logs:                 alerts.logs,
   metadata:             alerts.metadata,
+  appearanceEmbedding:  alerts.appearanceEmbedding,
   timestamp:            alerts.timestamp,
   createdAt:            alerts.createdAt,
 } as const;

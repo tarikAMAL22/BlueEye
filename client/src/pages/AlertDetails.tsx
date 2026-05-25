@@ -144,6 +144,129 @@ function PotentialMatches({ personId, onSelect, searchScore, currentPersonType }
   );
 }
 
+function AppearanceMatches({ alertId, onAssigned }: { alertId: number; onAssigned: () => void }) {
+  const [windowMinutes, setWindowMinutes] = useState(5);
+  const utils = trpc.useUtils();
+
+  const { data, isLoading } = trpc.bodyMatches.getSuggestions.useQuery(
+    { alertId, windowMinutes },
+    { refetchOnWindowFocus: false }
+  );
+
+  const assignMutation   = trpc.bodyMatches.assignPerson.useMutation({
+    onSuccess: () => {
+      toast.success("Personne assignée à l'alerte");
+      utils.alerts.getById.invalidate({ id: alertId });
+      onAssigned();
+    },
+  });
+  const dismissMutation  = trpc.bodyMatches.dismissSuggestions.useMutation({
+    onSuccess: () => toast.success("Alerte marquée — aucune correspondance"),
+  });
+
+  return (
+    <div className="p-6 rounded-xl border border-orange-500/30 bg-orange-500/5 space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-bold text-orange-400 flex items-center gap-2 uppercase tracking-tight">
+          <Scan className="w-4 h-4" /> Potential Appearance Matches
+          {data && (
+            <span className="text-[10px] font-mono bg-orange-500/20 text-orange-300 border border-orange-500/30 px-1.5 py-0.5 rounded">
+              {data.suggestions.length} suggestion{data.suggestions.length !== 1 ? "s" : ""}
+            </span>
+          )}
+        </h3>
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span className="text-[10px] uppercase font-bold">Fenêtre :</span>
+          {[2, 5, 10, 30].map(m => (
+            <button
+              key={m}
+              onClick={() => setWindowMinutes(m)}
+              className={`px-2 py-0.5 rounded text-[10px] font-mono border transition-colors ${
+                windowMinutes === m
+                  ? "bg-orange-900/50 text-orange-300 border-orange-600"
+                  : "text-muted-foreground border-border/50 hover:text-orange-300"
+              }`}
+            >
+              {m}min
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="text-[10px] text-orange-300/70 bg-orange-950/30 border border-orange-900/40 rounded px-3 py-2">
+        ⚠ Correspondances basées sur la couleur et texture des vêtements. L'opérateur doit confirmer l'identité.
+      </div>
+
+      {isLoading && (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground py-4 justify-center">
+          <RefreshCw className="w-4 h-4 animate-spin" /> Analyse des vêtements...
+        </div>
+      )}
+
+      {!isLoading && data?.suggestions.length === 0 && (
+        <p className="text-xs text-muted-foreground italic text-center py-4 border border-dashed border-border/40 rounded-lg">
+          Aucune correspondance dans les {windowMinutes} dernières minutes
+        </p>
+      )}
+
+      {data && data.suggestions.length > 0 && (
+        <>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+            {data.suggestions.map((s: any) => (
+              <div key={s.alertId} className="rounded-lg border border-border/40 bg-card/50 overflow-hidden flex flex-col">
+                <div className="relative aspect-[3/4] bg-muted">
+                  {s.faceSnapshotUrl ? (
+                    <img src={s.faceSnapshotUrl} alt="match" className="w-full h-full object-cover" />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center">
+                      <Users className="w-8 h-8 text-muted-foreground opacity-30" />
+                    </div>
+                  )}
+                  <span className={`absolute top-1 right-1 text-[9px] font-bold px-1.5 py-0.5 rounded font-mono ${
+                    s.similarityScore >= 90 ? "bg-green-600 text-white" :
+                    s.similarityScore >= 75 ? "bg-yellow-600 text-white" :
+                                              "bg-gray-700 text-gray-300"
+                  }`}>
+                    {s.similarityScore}%
+                  </span>
+                  <span className="absolute bottom-1 left-1 text-[9px] bg-black/70 text-cyan-400 px-1 py-0.5 rounded font-mono">
+                    {s.detectionType === 'FACE' ? '👤' : '🚶'} {s.cameraName ?? '—'}
+                  </span>
+                </div>
+                <div className="p-2 flex flex-col gap-1 flex-1">
+                  {s.personName ? (
+                    <p className="text-xs font-bold text-primary truncate">{s.personName}</p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground italic">Inconnu</p>
+                  )}
+                  <p className="text-[9px] text-muted-foreground">il y a {Math.abs(s.distanceSeconds)}s</p>
+                  {s.personId && (
+                    <button
+                      onClick={() => assignMutation.mutate({ alertId, personId: s.personId })}
+                      disabled={assignMutation.isPending}
+                      className="mt-auto w-full py-1 rounded border border-cyan-800 bg-cyan-950/40 text-cyan-400 text-[10px] font-mono font-semibold hover:bg-cyan-900/40 transition-colors disabled:opacity-50"
+                    >
+                      ✓ Assigner
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <button
+            onClick={() => dismissMutation.mutate({ alertId })}
+            disabled={dismissMutation.isPending}
+            className="w-full py-2 rounded border border-border/50 text-muted-foreground text-xs font-mono hover:border-gray-500 hover:text-gray-300 transition-colors"
+          >
+            ✕ Aucune de ces personnes — marquer comme vérifié
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function AlertDetails() {
   const { id } = useParams();
   const [, setLocation] = useLocation();
@@ -536,6 +659,11 @@ export default function AlertDetails() {
           </div>
         </div>
       </div>
+
+      {/* Appearance Matches — body-only alerts */}
+      {isBodyOnly && (alert as any).appearanceEmbedding && (
+        <AppearanceMatches alertId={alertId} onAssigned={refetch} />
+      )}
 
       {/* Identity Resolution */}
       {isUnknown && !isNoFace && (

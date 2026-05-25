@@ -135,7 +135,8 @@ export default function PersonRegistry() {
       .filter((p: any) =>
         !p.isBlacklisted &&
         (p.role.toLowerCase() === "unknown" || p.name.toLowerCase().startsWith("unknown-")) &&
-        !p.name.toLowerCase().startsWith("body-only-")
+        !p.name.toLowerCase().startsWith("body-only-") &&
+        p.detectionType !== "body_only"
       )
       .filter((p: any) => p.name.toLowerCase().includes(unknownSearch.toLowerCase()));
   }, [persons, unknownSearch]);

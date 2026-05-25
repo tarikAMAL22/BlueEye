@@ -98,6 +98,7 @@ export const alerts = mysqlTable("alerts", {
   faceQuality: mysqlEnum("faceQuality", ["CLEAR", "UNCLEAR", "NO_FACE"]).default("CLEAR").notNull(),
   logs: json("logs").$type<{ timestamp: string; action: string; details?: string }[]>(),
   metadata: json("metadata"), // For multi-face detection and other extras
+  appearanceEmbedding: text("appearanceEmbedding"),
   timestamp: timestamp("timestamp").defaultNow().notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
